@@ -13,6 +13,12 @@ class Constant(object):
         self.value = value
 
     def coerce(self, value):
+        if isinstance(self.value, str) and isinstance(value, bytes):
+            try:
+                value = value.decode()
+            except UnicodeDecodeError:
+                pass
+
         if value != self.value:
             raise InvalidError("%r != %r" % (value, self.value))
         return value
@@ -65,13 +71,19 @@ class Float(object):
 
 
 class Bytes(object):
-    """A binary string."""
+    """A binary string.
+
+    If the value is a Python3 str (unicode), it will be automatically
+    encoded.
+    """
     def coerce(self, value):
+        if isinstance(value, bytes):
+            return value
+
         if isinstance(value, str):
             return value.encode()
-        if not isinstance(value, bytes):
-            raise InvalidError("%r isn't a bytestring" % (value,))
-        return value
+
+        raise InvalidError("%r isn't a bytestring" % value)
 
 
 class Unicode(object):

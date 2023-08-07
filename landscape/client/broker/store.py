@@ -91,25 +91,28 @@ See L{MessageStore} for details about how messages are stored on the file
 system and L{landscape.lib.message.got_next_expected} to check how the
 strategy for updating the pending offset and the sequence is implemented.
 """
-
 import itertools
 import logging
 import os
+import shutil
+import traceback
 import uuid
 
 from twisted.python.compat import iteritems
 
 from landscape import DEFAULT_SERVER_API
 from landscape.lib import bpickle
-from landscape.lib.fs import create_binary_file, read_binary_file
-from landscape.lib.versioning import sort_versions, is_version_higher
+from landscape.lib.fs import create_binary_file
+from landscape.lib.fs import read_binary_file
+from landscape.lib.versioning import is_version_higher
+from landscape.lib.versioning import sort_versions
 
 
 HELD = "h"
 BROKEN = "b"
 
 
-class MessageStore(object):
+class MessageStore:
     """A message store which stores its messages in a file system hierarchy.
 
     Beside the "sequence" and the "pending offset" values described in the
@@ -134,9 +137,12 @@ class MessageStore(object):
     # in case the server supports it.
     _api = DEFAULT_SERVER_API
 
-    def __init__(self, persist, directory, directory_size=1000):
+    def __init__(self, persist, directory, directory_size=1000, max_dirs=4,
+                 max_size_mb=400):
         self._directory = directory
         self._directory_size = directory_size
+        self._max_dirs = max_dirs  # Maximum number of directories in store
+        self._max_size_mb = max_size_mb  # Maximum size of message store
         self._schemas = {}
         self._original_persist = persist
         self._persist = persist.root_at("message-store")
@@ -273,7 +279,7 @@ class MessageStore(object):
                 logging.exception(e)
                 self._add_flags(filename, BROKEN)
             else:
-                if u"type" not in message:
+                if "type" not in message:
                     # Special case to decode keys for messages which were
                     # serialized by py27 prior to py3 upgrade, and having
                     # implicit byte message keys. Message may still get
@@ -281,8 +287,9 @@ class MessageStore(object):
                     # broker. (lp: #1718689)
                     message = {
                         (k if isinstance(k, str) else k.decode("ascii")): v
-                        for k, v in message.items()}
-                    message[u"type"] = message[u"type"].decode("ascii")
+                        for k, v in message.items()
+                    }
+                    message["type"] = message["type"].decode("ascii")
 
                 unknown_type = message["type"] not in accepted_types
                 unknown_api = not is_version_higher(server_api, message["api"])
@@ -292,10 +299,53 @@ class MessageStore(object):
                     messages.append(message)
         return messages
 
+    def get_messages_total_size(self):
+        """Get total size of messages directory"""
+        sizes = []
+        for dirname in os.listdir(self._directory):
+            dirpath = os.path.join(self._directory, dirname)
+            dirsize = sum(file.stat().st_size for file in os.scandir(dirpath))
+            sizes.append(dirsize)
+        return sum(sizes)
+
+    def delete_messages_over_limit(self):
+        """
+        Delete messages dirs if there's any over the max, which happens if
+        messages are queued up but not able to be sent
+        """
+
+        cur_dirs = os.listdir(self._directory)
+        cur_dirs.sort(key=int)  # Since you could have 0, .., 9, 10
+        num_dirs = len(cur_dirs)
+
+        num_dirs_to_delete = max(0, num_dirs - self._max_dirs)  # No negatives
+        dirs_to_delete = cur_dirs[:num_dirs_to_delete]  # Chop off beginning
+
+        for dirname in dirs_to_delete:
+            dirpath = os.path.join(self._directory, dirname)
+            try:
+                logging.debug(f"Trimming message store: {dirpath}")
+                shutil.rmtree(dirpath)
+            except Exception:  # We want to continue like normal if any error
+                logging.warning(traceback.format_exc())
+                logging.warning("Unable to delete message directory!")
+                logging.warning(dirpath)
+
+        # Something is wrong if after deleting a bunch of files, we are still
+        # using too much space. Rather then look around for big files, we just
+        # start over.
+        num_bytes = self.get_messages_total_size()
+        num_mb = num_bytes / 1e6
+        if num_mb > self._max_size_mb:
+            logging.warning("Messages too large! Clearing all messages!")
+            self.delete_all_messages()
+
     def delete_old_messages(self):
         """Delete messages which are unlikely to be needed in the future."""
-        for fn in itertools.islice(self._walk_messages(exclude=HELD + BROKEN),
-                                   self.get_pending_offset()):
+        for fn in itertools.islice(
+            self._walk_messages(exclude=HELD + BROKEN),
+            self.get_pending_offset(),
+        ):
             os.unlink(fn)
             containing_dir = os.path.split(fn)[0]
             if not os.listdir(containing_dir):
@@ -326,9 +376,9 @@ class MessageStore(object):
         pending_offset = self.get_pending_offset()
         for filename in self._walk_messages(exclude=BROKEN):
             flags = self._get_flags(filename)
-            if ((HELD in flags or i >= pending_offset) and
-                os.stat(filename).st_ino == message_id
-                ):
+            if (HELD in flags or i >= pending_offset) and os.stat(
+                filename,
+            ).st_ino == message_id:
                 return True
             if BROKEN not in flags and HELD not in flags:
                 i += 1
@@ -347,7 +397,8 @@ class MessageStore(object):
         if not self._persist.has("first-failure-time"):
             self._persist.set("first-failure-time", timestamp)
         continued_failure_time = timestamp - self._persist.get(
-            "first-failure-time")
+            "first-failure-time",
+        )
         if self._persist.get("blackhole-messages"):
             # Already added the resync message
             return
@@ -357,7 +408,8 @@ class MessageStore(object):
             self._persist.set("blackhole-messages", True)
             logging.warning(
                 "Unable to succesfully communicate with Landscape server "
-                "for more than a week. Waiting for resync.")
+                "for more than a week. Waiting for resync.",
+            )
 
     def add(self, message):
         """Queue a message for delivery.
@@ -372,6 +424,8 @@ class MessageStore(object):
         if self._persist.get("blackhole-messages"):
             logging.debug("Dropped message, awaiting resync.")
             return
+
+        self.delete_messages_over_limit()
 
         server_api = self.get_server_api()
 
@@ -432,7 +486,8 @@ class MessageStore(object):
         """Walk the files which are definitely pending."""
         pending_offset = self.get_pending_offset()
         for i, filename in enumerate(
-                self._walk_messages(exclude=HELD + BROKEN)):
+            self._walk_messages(exclude=HELD + BROKEN),
+        ):
             if i >= pending_offset:
                 yield filename
 
@@ -443,12 +498,15 @@ class MessageStore(object):
         for message_dir in message_dirs:
             for filename in self._get_sorted_filenames(message_dir):
                 flags = set(self._get_flags(filename))
-                if (not exclude or not exclude & flags):
+                if not exclude or not exclude & flags:
                     yield self._message_dir(message_dir, filename)
 
     def _get_sorted_filenames(self, dir=""):
-        message_files = [x for x in os.listdir(self._message_dir(dir))
-                         if not x.endswith(".tmp")]
+        message_files = [
+            x
+            for x in os.listdir(self._message_dir(dir))
+            if not x.endswith(".tmp")
+        ]
         message_files.sort(key=lambda x: int(x.split("_")[0]))
         return message_files
 
@@ -549,6 +607,7 @@ def get_default_message_store(*args, **kwargs):
     Get a L{MessageStore} object with all Landscape message schemas added.
     """
     from landscape.message_schemas.server_bound import message_schemas
+
     store = MessageStore(*args, **kwargs)
     for schema in message_schemas:
         store.add_schema(schema)

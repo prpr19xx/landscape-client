@@ -8,8 +8,16 @@ APT_PREFERENCES_SIZE_LIMIT = 1048576  # 1 MByte
 # The name "UBUNTU" is used in the variable name due to the fact that the path
 # is Ubuntu-specific, taken from /etc/login.defs.
 UBUNTU_PATH = ":".join(
-    ["/usr/local/sbin", "/usr/local/bin", "/usr/sbin", "/usr/bin", "/sbin",
-     "/bin", "/snap/bin"])
+    [
+        "/usr/local/sbin",
+        "/usr/local/bin",
+        "/usr/sbin",
+        "/usr/bin",
+        "/sbin",
+        "/bin",
+        "/snap/bin",
+    ],
+)
 
 SUCCESS_RESULT = 1
 ERROR_RESULT = 100
@@ -33,3 +41,8 @@ POLICY_ALLOW_ALL_CHANGES = 2
 # So we'll give the problem one chance to resolve itself, by only waiting for
 # one run of apt-update.
 UNKNOWN_PACKAGE_DATA_TIMEOUT = 70 * 60
+
+# Until we modernize config-parsing, here are all the string values we
+# accept as `False` in the conf file. Any other value is `True`,
+# conventionally.
+FALSE_VALUES = (False, "False", "false", 0, "no")

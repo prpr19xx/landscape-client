@@ -2,8 +2,14 @@ PYDOCTOR ?= pydoctor
 TXT2MAN ?= txt2man
 PYTHON2 ?= python2
 PYTHON3 ?= python3
+SNAPCRAFT = SNAPCRAFT_BUILD_INFO=1 snapcraft
 TRIAL ?= -m twisted.trial
 TRIAL_ARGS ?=
+
+# PEP8 rules ignored:
+# W503 https://www.flake8rules.com/rules/W503.html
+# E203 Whitespace before ':' (enforced by Black)
+PEP8_IGNORED = W503,E203
 
 .PHONY: help
 help:  ## Print help about available targets
@@ -15,11 +21,15 @@ depends: depends3  ## py2 is deprecated
 
 .PHONY: depends2
 depends2:
-	sudo apt-get -y install python-twisted-core python-distutils-extra python-mock python-configobj python-netifaces python-pycurl
+	sudo apt-get -y install python-twisted-core python-distutils-extra python-mock python-configobj python-netifaces python-pycurl python-pip
+	pip install pre-commit
+	pre-commit install
 
 .PHONY: depends3
 depends3:
-	sudo apt-get -y install python3-twisted python3-distutils-extra python3-mock python3-configobj python3-netifaces python3-pycurl
+	sudo apt-get -y install python3-twisted python3-distutils-extra python3-mock python3-configobj python3-netifaces python3-pycurl python3-pip
+	pip3 install pre-commit
+	pre-commit install
 
 all: build
 
@@ -56,12 +66,14 @@ coverage:
 
 .PHONY: lint
 lint:
-	$(PYTHON3) -m flake8 --ignore E24,E121,E123,E125,E126,E221,E226,E266,E704,E265,W504 \
-		`find landscape -name \*.py`
+	$(PYTHON3) -m flake8 --ignore $(PEP8_IGNORED) `find landscape -name \*.py`
 
 .PHONY: pyflakes
 pyflakes:
 	-pyflakes `find landscape -name \*.py`
+
+pre-commit:
+	-pre-commit run -a
 
 clean:
 	-find landscape -name __pycache__ -exec rm -rf {} \;
@@ -114,6 +126,35 @@ tags:
 .PHONY: etags
 etags:
 	-etags --languages=python -R .
+
+snap-install:
+	sudo snap install --devmode landscape-client_0.1_amd64.snap
+.PHONY: snap-install
+
+snap-remote-build:
+	snapcraft remote-build
+.PHONY: snap-remote-build
+
+snap-remove:
+	sudo snap remove --purge landscape-client
+.PHONY: snap-remove
+
+snap-shell: snap-install
+	sudo snap run --shell landscape-client.landscape-client
+.PHONY: snap-shell
+
+snap-debug:
+	$(SNAPCRAFT) -v --debug
+.PHONY: snap-debug
+
+snap-clean: snap-remove
+	$(SNAPCRAFT) clean
+	-rm landscape-client_0.1_amd64.snap
+.PHONY: snap-clean
+
+snap:
+	$(SNAPCRAFT)
+.PHONY: snap
 
 include Makefile.packaging
 

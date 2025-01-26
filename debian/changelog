@@ -1,6 +1,176 @@
-landscape-client (23.02-0ubuntu1) focal; urgency=medium
+landscape-client (24.12-0landscape0) jammy; urgency=medium
 
-  * New upstream release for focal, jammy, kinetic, lunar
+  * feat: add optional installation_request_id parameter to registration 
+  * feat: update snapcraft.yaml to use snapd-control-managed
+  * fix: get tests passing on plucky
+  * fix: Updated motd
+  * fix: SSL Certificates properly surfaced
+  * fix: monitor-only set properly when false/no passed in config 
+  * fix: flag --is-registered prints correct outputs
+  * fix: insecure id not set during registration on self hosted 
+  * fix: TiOBE TiCS workflow
+  * fix: prevent creation of clones after reverting to previous snap revision 
+  * fix: add missing python3-yaml to runtime dependencies (LP: #2084586)
+  * fix: process full server response 
+  * refactor: remove snapd-control annotation from snapcraft.yaml
+
+ -- Justin Kim <justin.kim@canonical.com>  Thu, 19 Dec 2024 17:22:40 +0000
+
+landscape-client (24.08+git6391-0landscape0) jammy; urgency=medium
+
+  * feat: add annotations content interface to snapcraft
+  * feat: add cloud-init message
+  * fix: parse livepatch process status check
+  * fix: revert fix for (LP: #1827857)
+  * fix: landscape-config uses ssl_public_key if provided
+  * fix: registration with landscape-client.config on the snap
+
+ -- Bill Kronholm <bill.kronholm@canonical.com>  Mon, 07 Oct 2024 13:44:59 -0700
+
+landscape-client (24.08+git6378-0landscape0) jammy; urgency=medium
+
+  * feat: add more snap configuration hooks
+  * fix: tests pass in a build environment
+
+ -- Bill Kronholm <bill.kronholm@canonical.com>  Fri, 13 Sep 2024 08:56:14 -0700
+
+landscape-client (24.08+git6375-0ubuntu0) jammy; urgency=medium
+
+  * feat: add new --register-if-needed flag for landscape-config
+  * feat: add log-observe plug to snap
+  * fix: get ubuntu pro info on snaps
+  * fix: add date and hash fields to tests that create repositories
+  * fix: ensure preferences.d directory exists in created APT dirs
+  * fix: patch missing Trial addDuration method in py312
+  * fix: ensure landscape homedir and broker.bpickle are owned by landscape (LP: #2065879)
+  * fix: add manage-sources-list-d CLI option (LP:2077360)
+  * refactor: use synchronous message exchange for landscape-config
+  * refactor: optparse to argparse
+  * build: use dev-lxc to fully configure container
+
+ -- Bill Kronholm <bill.kronholm@canonical.com>  Wed, 11 Sep 2024 14:20:58 -0700
+
+landscape-client (24.08-0landscape0) jammy; urgency=medium
+
+  * feat: added flag to skip sending a registration request
+  * fix(snap): reduce computer title retry delay
+  * fix(snap): retry setting the computer title
+  * fix: remove system exit in landscape-sysinfo.wrapper
+  * fix: allow for oracular version of pycurl error string (LP: #2068050)
+  * fix: add non-filtered interfaces to the API response (LP: #2052834)
+
+ -- Mitch Burton <mitch.burton@canonical.com>  Tue, 06 Aug 2024 11:13:10 -0700
+
+landscape-client (24.04-0landscape0) jammy; urgency=medium
+
+  * Improvements:
+    - use snap set to change snap configurations
+  * Fixes:
+    - include deb822 sources when collecting source channels (LP: #2062561)
+    - merge SnapMonitor into SnapManager to fix config reporting permissions
+    - d/landscape-sysinfo.wrapper: fix regression in core count logic
+  * Snap
+    - return empty Ubuntu Pro info for non-core Snap to unblock registration
+    - add network-manager and network-control plugs
+
+ -- Mitch Burton <mitch.burton@canonical.com>  Tue, 30 Apr 2024 11:30:57 -0700
+
+landscape-client (24.02+git6339-0ubuntu0) focal; urgency=medium
+
+  * Fixes:
+    - fix bash shell expansion vulnerability (LP: #2055348)
+    - snap build: including missing build packages and use python build plugin
+    - fix UserManager to use correct shadow file on Core
+    - snap: fix ProcessKiller to use process-control interface and display
+      landscape-config command on setup
+    - fix Ubuntu Pro info not being sent on registration (LP: #2057976)
+    - permit management of Ubuntu Core devices without a license
+
+ -- Spencer Runde <spencer.runde@canonical.com>  Mon, 18 Mar 2024 20:56:01 +0000
+
+landscape-client (24.02-0ubuntu0) noble; urgency=medium
+
+  * Improvements:
+    - use dbus in shutdown manager instead of subprocess
+    - improve messages about manager plugin configuration
+    - add getting and settings snap configurations
+    - read temperature from hwmon devices
+    - add snapd device information to ComputerInfo message
+    - add snap services management
+  * Fixes:
+    - d/landscape-common.postinst d/landscape-common.prerm: do not call
+    update-motd when installing/removing landscape-sysinfo.wrapper
+    - Livepatch status reporting bug
+    - bpickle: guard against negative string/bytestring lengths
+    - Makefile: remove check2, depends2, and references to python2
+  * Ubuntu Core:
+    - add path for os-release inside a snap
+    - computer title generation for zero-touch deployment on Core
+    - user management on Core
+    - deploy system user assertion to device
+    - remote script execution for snaps
+
+ -- Mitch Burton <mitch.burton@canonical.com>  Mon, 26 Feb 2024 14:26:36 -0800
+
+landscape-client (23.10-0ubuntu0) bionic; urgency=medium
+
+  * New upstream release 23.10
+    - Update snapcraft.yaml.
+    - Add optional hostagent_uid field to registration message.
+    - Allow landscape-config to start landscape-client systemd service. (LP: #2027613)
+    - Pinger supports self-signed certificates.
+    - Enable dev build for strictly-confined snap.
+
+ -- Bill Kronholm <bill.kronholm@canonical.com>  Wed, 11 Oct 2023 16:15:18 -0700
+
+landscape-client (23.08-0ubuntu1) mantic; urgency=medium
+
+  * New upstream release 23.08
+    - Restructure landscape-config wizard (LP: #2031673)
+    - Add SnapMonitor, SnapManager, and related machinery (LP: #2031682)
+    - Limit message data directory size (LP: #2004591)
+    - Add zfs and btrfs to stable fs-lists (LP: #1499104)
+    - Test for broken control file (LP: #1813442)
+    - Config man page and help info fixes (LP: #1662222)
+    - Removed unnecesary select to the database (LP: #1994951)
+    - Last apt-key removal (LP: #1990435)
+    - Added a logging level check to provide a better error (LP: #2027521)
+    - Broker is able to bootstrap the landscape-client folder (LP: #1868730)
+    - Changed gpg file name to be less generic (LP: #2008432)
+    - Improve Dependency data is read from the deb packages (LP: #1813442)
+    - Fix error in swift plugin (LP: #2031674)
+    - Repository profiles do not overwrite all configurations (LP: #2031680)
+    - Remove old plugins (LP: #1989968)
+    - Send ubuntu pro reboot output (LP: #2031684)
+
+ -- Kevin Nasto <kevin.nasto@canonical.com>  Thu, 17 Aug 2023 13:41:21 -0500
+
+landscape-client (23.02-0ubuntu1) lunar; urgency=medium
+
+  * New upstream release 23.02:
+    - Preventing the generation of large messages and logs that can overwhelm
+      Landscape Server (LP: #1995775)
+    - Improved MOTD slowdown on machines with many tap network interfaces
+      (LP: #2006396)
+    - No longer using deprecated apt-key when storing trusted GPG keys
+      (LP: #1973202)
+    - Fixed issue recognising Parallels VMs as Virtual Machine clients
+      (LP: #1827909)
+    - Fixes for incorrect logfile rotation config (LP: #1968189)
+    - Client-side backoff handling to moderate traffic to Landscape Server
+      during high load (LP: #1947399)
+    - Avoid sending empty messages when catching up to expected next message
+      (LP: #1917540)
+    - --is-registered CLI option to quickly check if client is registered
+      (LP: #1912516)
+    - Can now report Ubuntu Pro attachment information if the version of
+      Landscape Server it is registered to supports this (LP: #2006401)
+    - Packages installed as dependencies as part of package profiles are now
+      appropriately autoremovable (LP: #1878957)
+    - Registration timeouts give an error instead of timing out (LP: #1889464)
+    - RHEV hypervisor VMs are now recognized as virtual machines (LP: #1884116)
+    - Doing a Landscape-driven release upgrade from a release running python 2
+      to one running python 3 no longer hangs forever (LP: #1943291)
 
  -- Mitch Burton <mitch.burton@canonical.com>  Wed, 08 Feb 2023 10:23:31 -0800
 

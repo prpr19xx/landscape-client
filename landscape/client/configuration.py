@@ -5,31 +5,37 @@ for the C{landscape-config} script.
 """
 import getpass
 import io
+import logging
 import os
 import pwd
+import re
+import shlex
 import sys
 import textwrap
-from functools import partial
+from urllib.parse import urlparse
 
-from landscape.client.broker.amp import RemoteBrokerConnector
+from landscape.client import GROUP
+from landscape.client import IS_SNAP
+from landscape.client import USER
 from landscape.client.broker.config import BrokerConfiguration
 from landscape.client.broker.registration import Identity
-from landscape.client.broker.registration import RegistrationError
 from landscape.client.broker.service import BrokerService
-from landscape.client.reactor import LandscapeReactor
-from landscape.client.sysvconfig import ProcessError
-from landscape.client.sysvconfig import SysVConfig
+from landscape.client.registration import ClientRegistrationInfo
+from landscape.client.registration import register
+from landscape.client.registration import RegistrationException
+from landscape.client.serviceconfig import ServiceConfig
+from landscape.client.serviceconfig import ServiceConfigException
 from landscape.lib import base64
-from landscape.lib.amp import MethodCallError
 from landscape.lib.bootstrap import BootstrapDirectory
 from landscape.lib.bootstrap import BootstrapList
 from landscape.lib.compat import input
 from landscape.lib.fetch import fetch
 from landscape.lib.fetch import FetchError
 from landscape.lib.fs import create_binary_file
+from landscape.lib.logging import init_app_logging
+from landscape.lib.network import get_fqdn
 from landscape.lib.persist import Persist
 from landscape.lib.tag import is_valid_tag
-from landscape.lib.twisted_util import gather_results
 
 
 EXIT_NOT_REGISTERED = 5
@@ -105,7 +111,12 @@ class LandscapeSetupConfiguration(BrokerConfiguration):
         "silent",
         "ok_no_register",
         "import_from",
+        "skip_registration",
+        "force_registration",
+        "register_if_needed",
     )
+
+    encoding = "utf-8"
 
     def _load_external_options(self):
         """Handle the --import parameter.
@@ -179,7 +190,7 @@ class LandscapeSetupConfiguration(BrokerConfiguration):
         """
         parser = super().make_parser()
 
-        parser.add_option(
+        parser.add_argument(
             "--import",
             dest="import_from",
             metavar="FILENAME_OR_URL",
@@ -188,51 +199,91 @@ class LandscapeSetupConfiguration(BrokerConfiguration):
             "passed in the command line, with precedence "
             "being given to real command line options.",
         )
-        parser.add_option(
+        parser.add_argument(
             "--script-users",
             metavar="USERS",
             help="A comma-separated list of users to allow "
-            "scripts to run.  To allow scripts to be run "
+            "scripts to run. To allow scripts to be run "
             "by any user, enter: ALL",
         )
-        parser.add_option(
+        parser.add_argument(
             "--include-manager-plugins",
             metavar="PLUGINS",
             default="",
-            help="A comma-separated list of manager plugins to " "load.",
+            help="A comma-separated list of manager plugins "
+            "to enable in addition to the defaults.",
         )
-        parser.add_option(
+        parser.add_argument(
+            "--manage-sources-list-d",
+            nargs="?",
+            default="true",
+            const="true",
+            help="Repository profiles manage the files in "
+            "’etc/apt/sources.list.d'. (default: true)",
+        )
+        parser.add_argument(
             "-n",
             "--no-start",
             action="store_true",
             help="Don't start the client automatically.",
         )
-        parser.add_option(
+        parser.add_argument(
             "--ok-no-register",
             action="store_true",
             help="Return exit code 0 instead of 2 if the client "
             "can't be registered.",
         )
-        parser.add_option(
+        parser.add_argument(
             "--silent",
             action="store_true",
             default=False,
             help="Run without manual interaction.",
         )
-        parser.add_option(
+        parser.add_argument(
             "--disable",
             action="store_true",
             default=False,
-            help="Stop running clients and disable start at " "boot.",
+            help="Stop running clients and disable start at boot.",
         )
-        parser.add_option(
+        parser.add_argument(
             "--init",
             action="store_true",
             default=False,
-            help="Set up the client directories structure " "and exit.",
+            help="Set up the client directories structure and exit.",
         )
-        parser.add_option(
+        parser.add_argument(
             "--is-registered",
+            action="store_true",
+            help="Exit with code 0 (success) if client is "
+            "registered else returns {}. Displays "
+            "registration info.".format(EXIT_NOT_REGISTERED),
+        )
+        parser.add_argument(
+            "--skip-registration",
+            action="store_true",
+            help="Don't send a new registration request",
+        )
+        parser.add_argument(
+            "--force-registration",
+            action="store_true",
+            help="Force sending a new registration request",
+        )
+        parser.add_argument(
+            "--register-if-needed",
+            action="store_true",
+            help=(
+                "Send a new registration request only if one has not been sent"
+            ),
+        )
+        parser.add_argument(
+            "--actively-registered",
+            action="store_true",
+            help="Exit with code 0 (success) if client is "
+            "registered else returns {}. Displays "
+            "registration info.".format(EXIT_NOT_REGISTERED),
+        )
+        parser.add_argument(
+            "--registration-sent",
             action="store_true",
             help="Exit with code 0 (success) if client is "
             "registered else returns {}. Displays "
@@ -255,6 +306,16 @@ class LandscapeSetupScript:
 
     def __init__(self, config):
         self.config = config
+        self.landscape_domain = None
+
+    def get_domain(self):
+        domain = self.landscape_domain
+        if domain:
+            return domain
+        url = self.config.url
+        if url:
+            return urlparse(url).netloc
+        return "landscape.canonical.com"
 
     def prompt_get_input(self, msg, required):
         """Prompt the user on the terminal for a value
@@ -263,14 +324,14 @@ class LandscapeSetupScript:
         @param required: True if value must be entered
         """
         while True:
-            value = input(msg)
+            value = input(msg).strip()
             if value:
                 return value
             elif not required:
                 break
             show_help("This option is required to configure Landscape.")
 
-    def prompt(self, option, msg, required=False):
+    def prompt(self, option, msg, required=False, default=None):
         """Prompt the user on the terminal for a value.
 
         @param option: The attribute of C{self.config} that contains the
@@ -278,8 +339,11 @@ class LandscapeSetupScript:
         @param msg: The message to prompt the user with (via C{input}).
         @param required: If True, the user will be required to enter a value
             before continuing.
+        @param default: Default only if set and no current value present
         """
-        default = getattr(self.config, option, None)
+        cur_value = getattr(self.config, option, None)
+        if cur_value:
+            default = cur_value
         if default:
             msg += f" [{default}]: "
         else:
@@ -288,6 +352,8 @@ class LandscapeSetupScript:
         result = self.prompt_get_input(msg, required)
         if result:
             setattr(self.config, option, result)
+        elif default:
+            setattr(self.config, option, default)
 
     def password_prompt(self, option, msg, required=False):
         """Prompt the user on the terminal for a password and mask the value.
@@ -324,27 +390,31 @@ class LandscapeSetupScript:
         show_help(
             """
             The computer title you provide will be used to represent this
-            computer in the Landscape user interface. It's important to use
-            a title that will allow the system to be easily recognized when
-            it appears on the pending computers page.
+            computer in the Landscape dashboard.
             """,
         )
-
-        self.prompt("computer_title", "This computer's title", True)
+        self.prompt(
+            "computer_title",
+            "This computer's title",
+            False,
+            default=get_fqdn(),
+        )
 
     def query_account_name(self):
         if "account_name" in self.config.get_command_line_options():
             return
 
-        show_help(
-            """
-            You must now specify the name of the Landscape account you
-            want to register this computer with. Your account name is shown
-            under 'Account name' at https://landscape.canonical.com .
-            """,
-        )
-
-        self.prompt("account_name", "Account name", True)
+        if not self.landscape_domain:
+            show_help(
+                """
+                You must now specify the name of the Landscape account you
+                want to register this computer with. Your account name is shown
+                under 'Account name' at https://landscape.canonical.com .
+                """,
+            )
+            self.prompt("account_name", "Account name", True)
+        else:
+            self.config.account_name = "standalone"
 
     def query_registration_key(self):
         command_line_options = self.config.get_command_line_options()
@@ -353,17 +423,14 @@ class LandscapeSetupScript:
 
         show_help(
             f"""
-            A registration key may be associated with your Landscape
-            account to prevent unauthorized registration attempts.  This
-            is not your personal login password.  It is optional, and unless
-            explicitly set on the server, it may be skipped here.
+            A Registration Key prevents unauthorized registration attempts.
 
-            If you don't remember the registration key you can find it
-            at https://landscape.canonical.com/account/{self.config.account_name}
+            Provide the Registration Key found at:
+            https://{self.get_domain()}/account/{self.config.account_name}
             """,  # noqa: E501
         )
 
-        self.password_prompt("registration_key", "Account registration key")
+        self.password_prompt("registration_key", "(Optional) Registration Key")
 
     def query_proxies(self):
         options = self.config.get_command_line_options()
@@ -372,10 +439,8 @@ class LandscapeSetupScript:
 
         show_help(
             """
-            The Landscape client communicates with the server over HTTP and
-            HTTPS.  If your network requires you to use a proxy to access HTTP
-            and/or HTTPS web sites, please provide the address of these
-            proxies now.  If you don't use a proxy, leave these fields empty.
+            If your network requires you to use a proxy, provide the address of
+            these proxies now.
             """,
         )
 
@@ -395,49 +460,6 @@ class LandscapeSetupScript:
                     ),
                 )
             return
-        show_help(
-            """
-            Landscape has a feature which enables administrators to run
-            arbitrary scripts on machines under their control. By default this
-            feature is disabled in the client, disallowing any arbitrary script
-            execution. If enabled, the set of users that scripts may run as is
-            also configurable.
-            """,
-        )
-        msg = "Enable script execution?"
-        included_plugins = [
-            p.strip() for p in self.config.include_manager_plugins.split(",")
-        ]
-        if included_plugins == [""]:
-            included_plugins = []
-        default = "ScriptExecution" in included_plugins
-        if prompt_yes_no(msg, default=default):
-            if "ScriptExecution" not in included_plugins:
-                included_plugins.append("ScriptExecution")
-            show_help(
-                """
-                By default, scripts are restricted to the 'landscape' and
-                'nobody' users. Please enter a comma-delimited list of users
-                that scripts will be restricted to. To allow scripts to be run
-                by any user, enter "ALL".
-                """,
-            )
-            while True:
-                self.prompt("script_users", "Script users")
-                invalid_users = get_invalid_users(self.config.script_users)
-                if not invalid_users:
-                    break
-                else:
-                    show_help(
-                        "Unknown system users: {}".format(
-                            ",".join(invalid_users),
-                        ),
-                    )
-                    self.config.script_users = None
-        else:
-            if "ScriptExecution" in included_plugins:
-                included_plugins.remove("ScriptExecution")
-        self.config.include_manager_plugins = ", ".join(included_plugins)
 
     def query_access_group(self):
         """Query access group from the user."""
@@ -473,52 +495,100 @@ class LandscapeSetupScript:
                 )
             return
 
+    def query_landscape_edition(self):
         show_help(
-            "You may provide tags for this computer e.g. server,precise.",
+            "Manage this machine with Landscape "
+            "(https://ubuntu.com/landscape):\n",
         )
-        while True:
-            self.prompt("tags", "Tags", False)
-            if self._get_invalid_tags(self.config.tags):
-                show_help(
-                    "Tag names may only contain alphanumeric characters.",
-                )
-                self.config.tags = None  # Reset for the next prompt
-            else:
-                break
+        options = self.config.get_command_line_options()
+        if "ping_url" in options and "url" in options:
+            return
+        if prompt_yes_no(
+            "Will you be using your own Self-Hosted Landscape installation?",
+            default=False,
+        ):
+            show_help(
+                "Provide the fully qualified domain name "
+                "of your Landscape Server e.g. "
+                "landscape.example.com",
+            )
+            self.landscape_domain = self.prompt_get_input(
+                "Landscape Domain: ",
+                True,
+            ).strip("/")
+            self.landscape_domain = re.sub(
+                r"^https?://",
+                "",
+                self.landscape_domain,
+            )
+            self.config.ping_url = f"http://{self.landscape_domain}/ping"
+            self.config.url = f"https://{self.landscape_domain}/message-system"
+        else:
+            self.landscape_domain = ""
+            self.config.ping_url = self.config._command_line_defaults[
+                "ping_url"
+            ]
+            self.config.url = self.config._command_line_defaults["url"]
+            if self.config.account_name == "standalone":
+                self.config.account_name = ""
 
-    def show_header(self):
-        show_help(
+    def show_summary(self):
+
+        tx = f"""A summary of the provided information:
+            Computer's Title: {self.config.computer_title}
+            Account Name: {self.config.account_name}
+            Landscape FQDN: {self.get_domain()}
+            Registration Key: {True if self.config.registration_key else False}
             """
-            This script will interactively set up the Landscape client. It will
-            ask you a few questions about this computer and your Landscape
-            account, and will submit that information to the Landscape server.
-            After this computer is registered it will need to be approved by an
-            account administrator on the pending computers page.
+        show_help(tx)
+        if self.config.http_proxy or self.config.https_proxy:
+            show_help(
+                f"""HTTPS Proxy: {self.config.https_proxy}
+                    HTTP  Proxy: {self.config.http_proxy}""",
+            )
 
-            Please see https://landscape.canonical.com for more information.
-            """,
+        params = (
+            "account_name",
+            "url",
+            "ping_url",
+            "registration_key",
+            "https_proxy",
+            "http_proxy",
         )
+        cmd = [
+            "sudo",
+            "landscape-client.config" if IS_SNAP else "landscape-config",
+        ]
+        for param in params:
+            value = self.config.get(param)
+            if value:
+                if param in self.config._command_line_defaults:
+                    if value == self.config._command_line_defaults[param]:
+                        continue
+                cmd.append("--" + param.replace("_", "-"))
+                if param == "registration_key":
+                    cmd.append("HIDDEN")
+                else:
+                    cmd.append(shlex.quote(value))
+        show_help(
+            "The landscape config parameters to repeat this registration"
+            " on another machine are:",
+        )
+        show_help(" ".join(cmd))
 
     def run(self):
         """Kick off the interactive process which prompts the user for data.
 
         Data will be saved to C{self.config}.
         """
-        self.show_header()
+        self.query_landscape_edition()
         self.query_computer_title()
         self.query_account_name()
         self.query_registration_key()
         self.query_proxies()
         self.query_script_plugin()
-        self.query_access_group()
         self.query_tags()
-
-
-def setup_init_script_and_start_client():
-    "Configure the init script to start the client on boot."
-    # XXX This function is misnamed; it doesn't start the client.
-    sysvconfig = SysVConfig()
-    sysvconfig.set_start_on_boot(True)
+        self.show_summary()
 
 
 def stop_client_and_disable_init_script():
@@ -526,9 +596,8 @@ def stop_client_and_disable_init_script():
     Stop landscape-client and change configuration to prevent starting
     landscape-client on boot.
     """
-    sysvconfig = SysVConfig()
-    sysvconfig.stop_landscape()
-    sysvconfig.set_start_on_boot(False)
+    ServiceConfig.stop_landscape()
+    ServiceConfig.set_start_on_boot(False)
 
 
 def setup_http_proxy(config):
@@ -550,7 +619,7 @@ def check_account_name_and_password(config):
     if config.silent and not config.no_start:
         if not (config.get("account_name") and config.get("computer_title")):
             raise ConfigurationError(
-                "An account name and computer title are " "required.",
+                "An account name and computer title are required.",
             )
 
 
@@ -583,30 +652,23 @@ def decode_base64_ssl_public_certificate(config):
         config.ssl_public_key = store_public_key_data(config, decoded_cert)
 
 
-def setup(config):
+def setup(config) -> Identity:
     """
     Perform steps to ensure that landscape-client is correctly configured
     before we attempt to register it with a landscape server.
 
     If we are not configured to be silent then interrogate the user to provide
     necessary details for registration.
+
+    :returns: a registration identity representing the configuration.
     """
     bootstrap_tree(config)
 
-    sysvconfig = SysVConfig()
     if not config.no_start:
         if config.silent:
-            setup_init_script_and_start_client()
-        elif not sysvconfig.is_configured_to_run():
-            answer = prompt_yes_no(
-                "\nThe Landscape client must be started "
-                "on boot to operate correctly.\n\n"
-                "Start Landscape client on boot?",
-            )
-            if answer:
-                setup_init_script_and_start_client()
-            else:
-                sys.exit("Aborting Landscape configuration")
+            ServiceConfig.set_start_on_boot(True)
+        elif not ServiceConfig.is_configured_to_run():
+            ServiceConfig.set_start_on_boot(True)
 
     setup_http_proxy(config)
     check_account_name_and_password(config)
@@ -617,17 +679,29 @@ def setup(config):
         script.run()
     decode_base64_ssl_public_certificate(config)
     config.write()
-    # Restart the client to ensure that it's using the new configuration.
+
+    persist = Persist(
+        filename=os.path.join(
+            config.data_path,
+            f"{BrokerService.service_name}.bpickle",
+        ),
+        user=USER,
+        group=GROUP,
+    )
+
+    return Identity(config, persist)
+
+
+def restart_client(config):
+    """Restart the client to ensure that it's using the new configuration."""
     if not config.no_start:
         try:
-            sysvconfig.restart_landscape()
-        except ProcessError:
-            print_text("Couldn't restart the Landscape client.", error=True)
-            print_text(
-                "This machine will be registered with the provided "
-                "details when the client runs.",
-                error=True,
-            )
+            secure_id = get_secure_id(config)
+            if not secure_id:
+                set_secure_id(config, "registering")
+            ServiceConfig.restart_landscape()
+        except ServiceConfigException as exc:
+            print_text(str(exc), error=True)
             exit_code = 2
             if config.ok_no_register:
                 exit_code = 0
@@ -637,13 +711,8 @@ def setup(config):
 def bootstrap_tree(config):
     """Create the client directories tree."""
     bootstrap_list = [
-        BootstrapDirectory("$data_path", "landscape", "root", 0o755),
-        BootstrapDirectory(
-            "$annotations_path",
-            "landscape",
-            "landscape",
-            0o755,
-        ),
+        BootstrapDirectory("$data_path", USER, GROUP, 0o755),
+        BootstrapDirectory("$annotations_path", USER, GROUP, 0o755),
     ]
     BootstrapList(bootstrap_list).bootstrap(
         data_path=config.data_path,
@@ -671,186 +740,84 @@ def store_public_key_data(config, certificate_data):
     return key_filename
 
 
-def failure(add_result, reason=None):
-    """Handle a failed communication by recording the kind of failure."""
-    if reason:
-        add_result(reason)
+def attempt_registration(
+    identity: Identity,
+    config: LandscapeSetupConfiguration,
+    retries: int = 14,
+) -> int:
+    """Attempts to send a registration message, reporting the result to stdout
+    or stderr. Retries `retries` times.
 
+    :returns: an exit code based on the registration result.
+    """
 
-def exchange_failure(add_result, ssl_error=False):
-    """Handle a failed call by recording if the failure was SSL-related."""
-    if ssl_error:
-        add_result("ssl-error")
+    client_info = ClientRegistrationInfo.from_identity(identity)
+
+    for retry in range(retries):
+        if retry > 0:
+            print(f"Retrying... (attempt {retry + 1} of {retries})")
+
+        try:
+            # We pass the cainfo in the case where a
+            # self-signed certificate is used.
+            registration_info = register(
+                client_info,
+                config.url,
+                cainfo=config.ssl_public_key,
+            )
+
+            break
+        except RegistrationException as e:
+            # This is unlikely to be resolved by the time we retry, so we fail
+            # immediately.
+            logging.error(f"Registration failed: {e}")
+            return 2
+        except Exception:
+            # Retrying...
+            logging.exception("Registration failed")
     else:
-        add_result("non-ssl-error")
+        # We're finished retrying and haven't succeeded yet.
+        return 2
 
-
-def handle_registration_errors(add_result, failure, connector):
-    """Handle registration errors.
-
-    The connection to the broker succeeded but the registration itself
-    failed, because of invalid credentials or excessive pending computers.
-    We need to trap the exceptions so they don't stacktrace (we know what is
-    going on), and try to cleanly disconnect from the broker.
-
-    Note: "results" contains a failure indication already (or will shortly)
-    since the registration-failed signal will fire."""
-    error = failure.trap(RegistrationError, MethodCallError)
-    if error is RegistrationError:
-        add_result(str(failure.value))
-    connector.disconnect()
-
-
-def success(add_result):
-    """Handle a successful communication by recording the fact."""
-    add_result("success")
-
-
-def done(ignored_result, connector, reactor):
-    """Clean up after communicating with the server."""
-    connector.disconnect()
-    reactor.stop()
-
-
-def got_connection(add_result, connector, reactor, remote):
-    """Handle becomming connected to a broker."""
-    handlers = {
-        "registration-done": partial(success, add_result),
-        "registration-failed": partial(failure, add_result),
-        "exchange-failed": partial(exchange_failure, add_result),
-    }
-    deferreds = [
-        remote.call_on_event(handlers),
-        remote.register().addErrback(
-            partial(handle_registration_errors, add_result),
-            connector,
-        ),
-    ]
-    results = gather_results(deferreds)
-    results.addCallback(done, connector, reactor)
-    return results
-
-
-def got_error(failure, reactor, add_result, print=print):
-    """Handle errors contacting broker."""
-    print(failure.getTraceback(), file=sys.stderr)
-    # Can't just raise SystemExit; it would be ignored by the reactor.
-    add_result(SystemExit())
-    reactor.stop()
-
-
-def register(
-    config,
-    reactor=None,
-    connector_factory=RemoteBrokerConnector,
-    got_connection=got_connection,
-    max_retries=14,
-    on_error=None,
-    results=None,
-):
-    """Instruct the Landscape Broker to register the client.
-
-    The broker will be instructed to reload its configuration and then to
-    attempt a registration.
-
-    @param reactor: The reactor to use.  This parameter is optional because
-        the client charm does not pass it.
-    @param connector_factory: A callable that accepts a reactor and a
-        configuration object and returns a new remote broker connection.  Used
-        primarily for dependency injection.
-    @param got_connection: The handler to trigger when the remote broker
-        connects.  Used primarily for dependency injection.
-    @param max_retries: The number of times to retry connecting to the
-        landscape client service.  The delay between retries is calculated
-        by Twisted and increases geometrically.
-    @param on_error: A callable that will be passed a non-zero positive
-        integer argument in the case that some error occurs.  This is a legacy
-        API provided for use by the client charm.
-    @param results: This parameter provides a mechanism to pre-seed the result
-        of registering.  Used for testing.
-    """
-    if reactor is None:
-        reactor = LandscapeReactor()
-
-    if results is None:
-        results = []
-    add_result = results.append
-
-    connector = connector_factory(reactor, config)
-    connection = connector.connect(max_retries=max_retries, quiet=True)
-    connection.addCallback(
-        partial(got_connection, add_result, connector, reactor),
+    set_secure_id(
+        config,
+        registration_info.secure_id,
+        registration_info.insecure_id,
     )
-    connection.addErrback(
-        partial(got_error, reactor=reactor, add_result=add_result),
-    )
-    reactor.run()
 
-    assert len(results) == 1, "We expect exactly one result."
-    # Results will be things like "success" or "ssl-error".
-    result = results[0]
+    print("Registration request sent successfully")
+    restart_client(config)
 
-    if isinstance(result, SystemExit):
-        raise result
-
-    # If there was an error and the caller requested that errors be reported
-    # to the on_error callable, then do so.
-    if result != "success" and on_error is not None:
-        on_error(1)
-    return result
+    return 0
 
 
-def report_registration_outcome(what_happened, print=print):
-    """Report the registration interaction outcome to the user in
-    human-readable form.
+def registration_sent(config):
     """
-    messages = {
-        "success": "System successfully registered.",
-        "unknown-account": "Invalid account name or registration key.",
-        "max-pending-computers": (
-            "Maximum number of computers pending approval reached. ",
-            "Login to your Landscape server account page to manage "
-            "pending computer approvals.",
-        ),
-        "ssl-error": (
-            "\nThe server's SSL information is incorrect, or fails "
-            "signature verification!\n"
-            "If the server is using a self-signed certificate, "
-            "please ensure you supply it with the --ssl-public-key "
-            "parameter."
-        ),
-        "non-ssl-error": (
-            "\nWe were unable to contact the server.\n"
-            "Your internet connection may be down. "
-            "The landscape client will continue to try and contact "
-            "the server periodically."
-        ),
-    }
-    message = messages.get(what_happened)
-    if message:
-        fd = sys.stdout if what_happened == "success" else sys.stderr
-        print(message, file=fd)
-
-
-def determine_exit_code(what_happened):
-    """Return what the application's exit code should be depending on the
-    registration result.
+    Return whether the client has sent a registration request to the server.
+    For now does same thing as is_registered as to make function name more
+    clear with what is performed. This is the legacy behaviour of
+    --is-registered and the name will be changed in a future release.
     """
-    if what_happened == "success":
-        return 0
-    else:
-        return 2  # An error happened
-
-
-def is_registered(config):
-    """Return whether the client is already registered."""
     persist_filename = os.path.join(
         config.data_path,
         f"{BrokerService.service_name}.bpickle",
     )
-    persist = Persist(filename=persist_filename)
+    persist = Persist(filename=persist_filename, user=USER, group=GROUP)
     identity = Identity(config, persist)
     return bool(identity.secure_id)
+
+
+def actively_registered(config):
+    """Return whether or not the client is currently registered with server"""
+    persist_filename = os.path.join(
+        config.data_path,
+        f"{BrokerService.service_name}.bpickle",
+    )
+    persist = Persist(filename=persist_filename, user=USER, group=GROUP)
+    accepted_types = persist.get("message-store.accepted-types")
+    if accepted_types is not None:
+        return len(accepted_types) > 1 and "register" not in accepted_types
+    return False
 
 
 def registration_info_text(config, registration_status):
@@ -877,9 +844,40 @@ def registration_info_text(config, registration_status):
     return text
 
 
-def main(args, print=print):
-    """Interact with the user and the server to set up client configuration."""
+def set_secure_id(config, new_id, insecure_id=None):
+    """Persists a secure id in the identity data file. This is used to indicate
+    whether we are currently in the process of registering.
+    """
+    persist = Persist(
+        filename=os.path.join(
+            config.data_path,
+            f"{BrokerService.service_name}.bpickle",
+        ),
+        user=USER,
+        group=GROUP,
+    )
+    identity = Identity(config, persist)
+    identity.secure_id = new_id
+    if insecure_id is not None:
+        identity.insecure_id = insecure_id
+    persist.save()
 
+
+def get_secure_id(config):
+    persist = Persist(
+        filename=os.path.join(
+            config.data_path,
+            f"{BrokerService.service_name}.bpickle",
+        ),
+        user=USER,
+        group=GROUP,
+    )
+    identity = Identity(config, persist)
+    return identity.secure_id
+
+
+def main(args, print=print):  # noqa: C901
+    """Interact with the user and the server to set up client configuration."""
     config = LandscapeSetupConfiguration()
     try:
         config.load(args)
@@ -887,14 +885,40 @@ def main(args, print=print):
         print_text(str(error), error=True)
         sys.exit(1)
 
-    if config.is_registered:
+    init_app_logging(
+        config.log_dir,
+        config.log_level,
+        "landscape-config",
+        config.quiet,
+    )
 
-        registration_status = is_registered(config)
+    if config.skip_registration and config.force_registration:
+        sys.exit(
+            "Do not set both skip registration "
+            "and force registration together.",
+        )
+
+    already_registered = registration_sent(config)
+
+    if config.is_registered or config.registration_sent:
+
+        registration_status = already_registered
 
         info_text = registration_info_text(config, registration_status)
         print(info_text)
 
         if registration_status:
+            sys.exit(0)
+        else:
+            sys.exit(EXIT_NOT_REGISTERED)
+
+    if config.actively_registered:
+        currently_registered = actively_registered(config)
+
+        info_text = registration_info_text(config, currently_registered)
+        print(info_text)
+
+        if currently_registered:
             sys.exit(0)
         else:
             sys.exit(EXIT_NOT_REGISTERED)
@@ -913,26 +937,38 @@ def main(args, print=print):
 
     # Setup client configuration.
     try:
-        setup(config)
+        identity = setup(config)
     except Exception as e:
         print_text(str(e))
         sys.exit("Aborting Landscape configuration")
 
-    print("Please wait...")
+    if config.skip_registration:
+        print("Registration skipped.")
+        return
 
-    # Attempt to register the client.
-    reactor = LandscapeReactor()
-    if config.silent:
-        result = register(config, reactor)
-        report_registration_outcome(result, print=print)
-        sys.exit(determine_exit_code(result))
+    should_register = False
+
+    if config.force_registration:
+        should_register = True
+    elif config.silent and not config.register_if_needed:
+        should_register = True
+    elif config.register_if_needed:
+        should_register = not already_registered
     else:
-        default_answer = not is_registered(config)
-        answer = prompt_yes_no(
+        default_answer = not already_registered
+        should_register = prompt_yes_no(
             "\nRequest a new registration for this computer now?",
             default=default_answer,
         )
-        if answer:
-            result = register(config, reactor)
-            report_registration_outcome(result, print=print)
-            sys.exit(determine_exit_code(result))
+
+    exit_code = 0
+
+    if should_register:
+        exit_code = attempt_registration(identity, config)
+        restart_client(config)
+    elif config.silent:
+        restart_client(config)
+    else:
+        print("Registration skipped.")
+
+    sys.exit(exit_code)

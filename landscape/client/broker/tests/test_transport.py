@@ -66,8 +66,8 @@ class HTTPTransportTest(LandscapeTest):
             transport.exchange,
             payload,
             computer_id="34",
-            exchange_token="abcd-efgh",
-            message_api="X.Y",
+            exchange_token=b"abcd-efgh",
+            message_api=b"X.Y",
         )
 
         def got_result(ignored):
@@ -141,7 +141,7 @@ class HTTPTransportTest(LandscapeTest):
             transport.exchange,
             "HI",
             computer_id="34",
-            message_api="X.Y",
+            message_api=b"X.Y",
         )
 
         def got_result(ignored):
@@ -190,16 +190,13 @@ class HTTPTransportTest(LandscapeTest):
             transport.exchange,
             "HI",
             computer_id="34",
-            message_api="X.Y",
+            message_api=b"X.Y",
         )
 
-        def got_result(ignored):
+        def got_result(failure):
             self.assertIs(r.request, None)
             self.assertIs(r.content, None)
-            self.assertTrue(
-                "server certificate verification failed"
-                in self.logfile.getvalue(),
-            )
+            self.assertEqual(failure.value.error_code, 60)
 
         result.addErrback(got_result)
         return result

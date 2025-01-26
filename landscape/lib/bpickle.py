@@ -31,11 +31,15 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 This file is modified from the original to work with python3, but should be
 wire compatible and behave the same way (bugs notwithstanding).
 """
+from typing import Dict
+from typing import Callable
+
 from landscape.lib.compat import _PY3
 from landscape.lib.compat import long
+from landscape.lib.compat import unicode
 
-dumps_table = {}
-loads_table = {}
+dumps_table: Dict[type, Callable] = {}
+loads_table: Dict[bytes, Callable] = {}
 
 
 def dumps(obj, _dt=dumps_table):
@@ -125,13 +129,23 @@ def loads_float(bytestring, pos, as_is=False):
 
 def loads_bytes(bytestring, pos, as_is=False):
     startpos = bytestring.index(b":", pos) + 1
-    endpos = startpos + int(bytestring[pos + 1 : startpos - 1])
+    step = int(bytestring[pos + 1 : startpos - 1])
+
+    if step < 0:
+        raise ValueError(f"Negative bytestring length: {step}")
+
+    endpos = startpos + step
     return bytestring[startpos:endpos], endpos
 
 
 def loads_unicode(bytestring, pos, as_is=False):
     startpos = bytestring.index(b":", pos) + 1
-    endpos = startpos + int(bytestring[pos + 1 : startpos - 1])
+    step = int(bytestring[pos + 1 : startpos - 1])
+
+    if step < 0:
+        raise ValueError(f"Negative unicode length: {step}")
+
+    endpos = startpos + step
     return bytestring[startpos:endpos].decode("utf-8"), endpos
 
 

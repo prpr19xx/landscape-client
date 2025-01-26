@@ -6,12 +6,10 @@ from unittest.mock import Mock
 from unittest.mock import patch
 
 from twisted.internet.defer import Deferred
-from twisted.internet.error import ProcessDone
-from twisted.internet.error import ProcessTerminated
-from twisted.python.failure import Failure
 
+from landscape.client import GROUP
+from landscape.client import USER
 from landscape.client.manager.manager import FAILED
-from landscape.client.manager.shutdownmanager import ShutdownFailedError
 from landscape.client.package.changer import ChangePackagesResult
 from landscape.client.package.changer import DEPENDENCY_ERROR_RESULT
 from landscape.client.package.changer import ERROR_RESULT
@@ -426,7 +424,7 @@ class AptPackageChangerTest(LandscapeTest):
 
         result = self.changer.change_packages(POLICY_ALLOW_INSTALLS)
 
-        self.facade.perform_changes.has_calls([call(), call()])
+        self.facade.perform_changes.assert_has_calls([call(), call()])
         self.facade.mark_install.assert_called_once_with(package1)
 
         self.assertEqual(result.code, SUCCESS_RESULT)
@@ -480,7 +478,7 @@ class AptPackageChangerTest(LandscapeTest):
 
         result = self.changer.change_packages(POLICY_ALLOW_INSTALLS)
 
-        self.facade.perform_changes.has_calls([call(), call()])
+        self.facade.perform_changes.assert_has_calls([call(), call()])
 
         self.assertEqual(result.code, DEPENDENCY_ERROR_RESULT)
         self.assertEqual(result.text, None)
@@ -535,7 +533,7 @@ class AptPackageChangerTest(LandscapeTest):
 
         result = self.changer.change_packages(POLICY_ALLOW_ALL_CHANGES)
 
-        self.facade.perform_changes.has_calls([call(), call()])
+        self.facade.perform_changes.assert_has_calls([call(), call()])
         self.facade.mark_install.assert_called_once_with(package2)
         self.facade.mark_remove.assert_called_once_with(package1)
 
@@ -881,9 +879,9 @@ class AptPackageChangerTest(LandscapeTest):
                 )
                 self.successResultOf(self.changer.run())
 
-        grnam_mock.assert_called_once_with("landscape")
+        grnam_mock.assert_called_once_with(GROUP)
         setgid_mock.assert_called_once_with(199)
-        pwnam_mock.assert_called_once_with("landscape")
+        pwnam_mock.assert_called_once_with(USER)
         setuid_mock.assert_called_once_with(199)
         system_mock.assert_called_once_with(
             "/fake/bin/landscape-package-reporter",
@@ -1617,140 +1615,6 @@ class AptPackageChangerTest(LandscapeTest):
 
         return result.addCallback(got_result)
 
-    def test_change_packages_with_reboot_flag(self):
-        """
-        When a C{reboot-if-necessary} flag is passed in the C{change-packages},
-        A C{ShutdownProtocolProcess} is created and the package result change
-        is returned.
-        """
-        self.store.add_task(
-            "changer",
-            {
-                "type": "change-packages",
-                "install": [2],
-                "binaries": [(HASH2, 2, PKGDEB2)],
-                "operation-id": 123,
-                "reboot-if-necessary": True,
-            },
-        )
-
-        def return_good_result(self):
-            return "Yeah, I did whatever you've asked for!"
-
-        self.replace_perform_changes(return_good_result)
-
-        result = self.changer.handle_tasks()
-
-        def got_result(result):
-            self.assertIn(
-                "Landscape is rebooting the system",
-                self.logfile.getvalue(),
-            )
-            self.assertMessages(
-                self.get_pending_messages(),
-                [
-                    {
-                        "operation-id": 123,
-                        "result-code": 1,
-                        "result-text": "Yeah, I did whatever you've "
-                        "asked for!",
-                        "type": "change-packages-result",
-                    },
-                ],
-            )
-
-        self.landscape_reactor.advance(5)
-        [arguments] = self.process_factory.spawns
-        protocol = arguments[0]
-        protocol.processEnded(Failure(ProcessDone(status=0)))
-        self.broker_service.reactor.advance(100)
-        self.landscape_reactor.advance(10)
-        return result.addCallback(got_result)
-
-    def test_change_packages_with_failed_reboot(self):
-        """
-        When a C{reboot-if-necessary} flag is passed in the C{change-packages},
-        A C{ShutdownProtocol} is created and the package result change is
-        returned, even if the reboot fails.
-        """
-        self.store.add_task(
-            "changer",
-            {
-                "type": "change-packages",
-                "install": [2],
-                "binaries": [(HASH2, 2, PKGDEB2)],
-                "operation-id": 123,
-                "reboot-if-necessary": True,
-            },
-        )
-
-        def return_good_result(self):
-            return "Yeah, I did whatever you've asked for!"
-
-        self.replace_perform_changes(return_good_result)
-
-        result = self.changer.handle_tasks()
-
-        def got_result(result):
-            self.assertMessages(
-                self.get_pending_messages(),
-                [
-                    {
-                        "operation-id": 123,
-                        "result-code": 1,
-                        "result-text": "Yeah, I did whatever you've "
-                        "asked for!",
-                        "type": "change-packages-result",
-                    },
-                ],
-            )
-            self.log_helper.ignore_errors(ShutdownFailedError)
-
-        self.landscape_reactor.advance(5)
-        [arguments] = self.process_factory.spawns
-        protocol = arguments[0]
-        protocol.processEnded(Failure(ProcessTerminated(exitCode=1)))
-        self.landscape_reactor.advance(10)
-        return result.addCallback(got_result)
-
-    def test_no_exchange_after_reboot(self):
-        """
-        After initiating a reboot process, no more messages are exchanged.
-        """
-        self.store.add_task(
-            "changer",
-            {
-                "type": "change-packages",
-                "install": [2],
-                "binaries": [(HASH2, 2, PKGDEB2)],
-                "operation-id": 123,
-                "reboot-if-necessary": True,
-            },
-        )
-
-        def return_good_result(self):
-            return "Yeah, I did whatever you've asked for!"
-
-        self.replace_perform_changes(return_good_result)
-
-        result = self.changer.handle_tasks()
-
-        def got_result(result):
-            # Advance both reactors so the pending messages are exchanged.
-            self.broker_service.reactor.advance(100)
-            self.landscape_reactor.advance(10)
-            payloads = self.broker_service.exchanger._transport.payloads
-            self.assertEqual(0, len(payloads))
-
-        self.landscape_reactor.advance(5)
-
-        [arguments] = self.process_factory.spawns
-        protocol = arguments[0]
-        protocol.processEnded(Failure(ProcessDone(status=0)))
-        self.broker_service.reactor.advance(100)
-        self.landscape_reactor.advance(10)
-        return result.addCallback(got_result)
-
     def test_run_gets_session_id(self):
         """
         Invoking L{PackageChanger.run} results in the session ID being fetched.
@@ -1762,3 +1626,10 @@ class AptPackageChangerTest(LandscapeTest):
         self.changer._session_id = None
         result = self.changer.run()
         return result.addCallback(assert_session_id)
+
+    def test_reboot_flag(self):
+        self.dbus_mock = Mock()
+
+        self.changer._run_reboot(bus=self.dbus_mock)
+        self.changer.bus.get_object.assert_called_once()
+        self.changer.bus_object.Reboot.assert_called_once()

@@ -14,7 +14,7 @@ import logging
 from twisted.internet.defer import Deferred
 
 from landscape.client.broker.exchange import maybe_bytes
-from landscape.client.monitor.ubuntuproinfo import get_ubuntu_pro_info
+from landscape.client.manager.ubuntuproinfo import get_ubuntu_pro_info
 from landscape.lib.juju import get_juju_info
 from landscape.lib.network import get_fqdn
 from landscape.lib.tag import is_valid_tag_list
@@ -58,6 +58,8 @@ class Identity:
     @ivar secure_id: A server-provided ID for secure message exchange.
     @ivar insecure_id: Non-secure server-provided ID, mainly used with
         the ping server.
+    @ivar accepted_types: The types of messages the server will accept
+        from the client during exchange
     @ivar computer_title: See L{BrokerConfiguration}.
     @ivar account_name: See L{BrokerConfiguration}.
     @ivar registration_password: See L{BrokerConfiguration}.
@@ -76,6 +78,8 @@ class Identity:
     registration_key = config_property("registration_key")
     tags = config_property("tags")
     access_group = config_property("access_group")
+    hostagent_uid = config_property("hostagent_uid")
+    installation_request_id = config_property("installation_request_id")
 
     def __init__(self, config, persist):
         self._config = config
@@ -190,6 +194,8 @@ class RegistrationHandler:
         tags = identity.tags
         group = identity.access_group
         registration_key = identity.registration_key
+        hostagent_uid = identity.hostagent_uid
+        installation_request_id = identity.installation_request_id
 
         self._message_store.delete_all_messages()
 
@@ -217,6 +223,10 @@ class RegistrationHandler:
 
         if group:
             message["access_group"] = group
+        if hostagent_uid:
+            message["hostagent_uid"] = hostagent_uid
+        if installation_request_id:
+            message["installation_request_id"] = installation_request_id
 
         server_api = self._message_store.get_server_api()
         # If we have juju data to send and if the server is recent enough to

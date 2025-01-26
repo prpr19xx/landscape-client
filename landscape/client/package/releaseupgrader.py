@@ -8,6 +8,8 @@ import tarfile
 
 from twisted.internet.defer import succeed
 
+from landscape.client import GROUP
+from landscape.client import USER
 from landscape.client.manager.manager import FAILED
 from landscape.client.manager.manager import SUCCEEDED
 from landscape.client.package.reporter import find_reporter_command
@@ -21,8 +23,8 @@ from landscape.lib.fetch import fetch_to_files
 from landscape.lib.fetch import url_to_filename
 from landscape.lib.fs import read_text_file
 from landscape.lib.gpg import gpg_verify
-from landscape.lib.lsb_release import LSB_RELEASE_FILENAME
-from landscape.lib.lsb_release import parse_lsb_release
+from landscape.lib.os_release import get_os_filename
+from landscape.lib.os_release import parse_os_release
 from landscape.lib.twisted_util import spawn_process
 
 
@@ -43,7 +45,7 @@ class ReleaseUpgrader(PackageTaskHandler):
     @cvar config_factory: The configuration class to use to build configuration
         objects to be passed to our constructor.
     @cvar queue_name: The queue we pick tasks from.
-    @cvar lsb_release_filename: The path to the LSB data on the file system.
+    @cvar os_release_filename: The path to the OS data on the file system.
     @cvar landscape_ppa_url: The URL of the Landscape PPA, if it is present
         in the computer's sources.list it won't be commented out.
     @cvar logs_directory: Path to the directory holding the upgrade-tool logs.
@@ -53,7 +55,7 @@ class ReleaseUpgrader(PackageTaskHandler):
 
     config_factory = ReleaseUpgraderConfiguration
     queue_name = "release-upgrader"
-    lsb_release_filename = LSB_RELEASE_FILENAME
+    os_release_filename = get_os_filename()
     landscape_ppa_url = "http://ppa.launchpad.net/landscape/trunk/ubuntu/"
     logs_directory = "/var/log/dist-upgrade"
     logs_limit = 100000  # characters
@@ -81,8 +83,8 @@ class ReleaseUpgrader(PackageTaskHandler):
         """
         target_code_name = message["code-name"]
         operation_id = message["operation-id"]
-        lsb_release_info = parse_lsb_release(self.lsb_release_filename)
-        current_code_name = lsb_release_info["code-name"]
+        os_release_info = parse_os_release(self.os_release_filename)
+        current_code_name = os_release_info["code-name"]
 
         if target_code_name == current_code_name:
             message = self.make_operation_result_message(
@@ -289,8 +291,8 @@ class ReleaseUpgrader(PackageTaskHandler):
         shutil.rmtree(self._config.upgrade_tool_directory)
 
         if os.getuid() == 0:
-            uid = pwd.getpwnam("landscape").pw_uid
-            gid = grp.getgrnam("landscape").gr_gid
+            uid = pwd.getpwnam(USER).pw_uid
+            gid = grp.getgrnam(GROUP).gr_gid
         else:
             uid = None
             gid = None

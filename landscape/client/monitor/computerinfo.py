@@ -5,12 +5,13 @@ from twisted.internet.defer import inlineCallbacks
 from twisted.internet.defer import returnValue
 
 from landscape.client.monitor.plugin import MonitorPlugin
+from landscape.client.snap_utils import get_snap_info
 from landscape.lib.cloud import fetch_ec2_meta_data
 from landscape.lib.fetch import fetch_async
 from landscape.lib.fs import read_text_file
-from landscape.lib.lsb_release import LSB_RELEASE_FILENAME
-from landscape.lib.lsb_release import parse_lsb_release
 from landscape.lib.network import get_fqdn
+from landscape.lib.os_release import get_os_filename
+from landscape.lib.os_release import parse_os_release
 
 METADATA_RETRY_MAX = 3  # Number of retries to get EC2 meta-data
 
@@ -29,13 +30,13 @@ class ComputerInfo(MonitorPlugin):
         self,
         get_fqdn=get_fqdn,
         meminfo_filename="/proc/meminfo",
-        lsb_release_filename=LSB_RELEASE_FILENAME,
+        os_release_filename=get_os_filename(),
         root_path="/",
         fetch_async=fetch_async,
     ):
         self._get_fqdn = get_fqdn
         self._meminfo_filename = meminfo_filename
-        self._lsb_release_filename = lsb_release_filename
+        self._os_release_filename = os_release_filename
         self._root_path = root_path
         self._cloud_instance_metadata = None
         self._cloud_retries = 0
@@ -57,6 +58,11 @@ class ComputerInfo(MonitorPlugin):
         self.call_on_accepted(
             "cloud-instance-metadata",
             self.send_cloud_instance_metadata_message,
+            True,
+        )
+        self.call_on_accepted(
+            "snap-info",
+            self.send_snap_message,
             True,
         )
 
@@ -96,6 +102,17 @@ class ComputerInfo(MonitorPlugin):
                 urgent=urgent,
             )
 
+    def send_snap_message(self, urgent=False):
+        message = self._create_snap_info_message()
+        if message:
+            message["type"] = "snap-info"
+            logging.info("Queueing message with updated snap info.")
+            self.registry.broker.send_message(
+                message,
+                self._session_id,
+                urgent=urgent,
+            )
+
     def exchange(self, urgent=False):
         broker = self.registry.broker
         broker.call_if_accepted(
@@ -111,6 +128,11 @@ class ComputerInfo(MonitorPlugin):
         broker.call_if_accepted(
             "cloud-instance-metadata",
             self.send_cloud_instance_metadata_message,
+            urgent,
+        )
+        broker.call_if_accepted(
+            "snap-info",
+            self.send_snap_message,
             urgent,
         )
 
@@ -160,7 +182,7 @@ class ComputerInfo(MonitorPlugin):
     def _get_distribution_info(self):
         """Get details about the distribution."""
         message = {}
-        message.update(parse_lsb_release(self._lsb_release_filename))
+        message.update(parse_os_release(self._os_release_filename))
         return message
 
     @inlineCallbacks
@@ -171,7 +193,6 @@ class ComputerInfo(MonitorPlugin):
             self._cloud_instance_metadata is None
             and self._cloud_retries < METADATA_RETRY_MAX
         ):
-
             self._cloud_instance_metadata = yield self._fetch_ec2_meta_data()
             message = self._cloud_instance_metadata
         returnValue(message)
@@ -196,3 +217,13 @@ class ComputerInfo(MonitorPlugin):
         deferred.addCallback(log_success)
         deferred.addErrback(log_no_meta_data_found)
         return deferred
+
+    def _create_snap_info_message(self):
+        """Create message with the snapd serial metadata."""
+        message = {}
+        snap_info = get_snap_info()
+        if snap_info:
+            self._add_if_new(message, "brand", snap_info["brand"])
+            self._add_if_new(message, "model", snap_info["model"])
+            self._add_if_new(message, "serial", snap_info["serial"])
+        return message

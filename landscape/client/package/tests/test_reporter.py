@@ -1,4 +1,4 @@
-import locale
+import logging
 import os
 import shutil
 import subprocess
@@ -37,13 +37,25 @@ from landscape.lib.apt.package.testing import SimpleRepositoryHelper
 from landscape.lib.fetch import FetchError
 from landscape.lib.fs import create_text_file
 from landscape.lib.fs import touch_file
-from landscape.lib.lsb_release import LSB_RELEASE_FILENAME
-from landscape.lib.lsb_release import parse_lsb_release
+from landscape.lib.os_release import get_os_filename
+from landscape.lib.os_release import parse_os_release
 from landscape.lib.testing import EnvironSaverHelper
 from landscape.lib.testing import FakeReactor
 
 
-SAMPLE_LSB_RELEASE = "DISTRIB_CODENAME=codename\n"
+SAMPLE_OS_RELEASE = """PRETTY_NAME="Ubuntu 22.04.3 LTS"
+NAME="Ubuntu"
+VERSION_ID="22.04"
+VERSION="22.04.3 LTS (Jammy Jellyfish)"
+VERSION_CODENAME=codename
+ID=ubuntu
+ID_LIKE=debian
+HOME_URL="https://www.ubuntu.com/"
+SUPPORT_URL="https://help.ubuntu.com/"
+BUG_REPORT_URL="https://bugs.launchpad.net/ubuntu/"
+PRIVACY_POLICY_URL="https://www.ubuntu.com/legal/terms-and-policies/privacy-policy"
+UBUNTU_CODENAME=codename
+"""
 
 
 class PackageReporterConfigurationTest(LandscapeTest):
@@ -60,7 +72,6 @@ class PackageReporterConfigurationTest(LandscapeTest):
 
 
 class PackageReporterAptTest(LandscapeTest):
-
     helpers = [AptFacadeHelper, SimpleRepositoryHelper, BrokerServiceHelper]
 
     Facade = AptFacade
@@ -152,7 +163,6 @@ class PackageReporterAptTest(LandscapeTest):
         return deferred.addCallback(got_result)
 
     def test_set_package_ids_with_unknown_request_id(self):
-
         self.store.add_task(
             "reporter",
             {"type": "package-ids", "ids": [123, 456], "request-id": 123},
@@ -377,7 +387,6 @@ class PackageReporterAptTest(LandscapeTest):
     )
     @mock.patch("logging.info", return_value=None)
     def test_fetch_hash_id_db(self, logging_mock, mock_fetch_async):
-
         # Assume package_hash_id_url is set
         self.config.data_path = self.makeDir()
         self.config.package_hash_id_url = "http://fake.url/path/"
@@ -392,7 +401,7 @@ class PackageReporterAptTest(LandscapeTest):
         # Fake uuid, codename and arch
         message_store = self.broker_service.message_store
         message_store.set_server_uuid("uuid")
-        self.reporter.lsb_release_filename = self.makeFile(SAMPLE_LSB_RELEASE)
+        self.reporter.os_release_filename = self.makeFile(SAMPLE_OS_RELEASE)
         self.facade.set_arch("arch")
 
         # Let's say fetch_async is successful
@@ -435,7 +444,7 @@ class PackageReporterAptTest(LandscapeTest):
         # Fake uuid, codename and arch
         message_store = self.broker_service.message_store
         message_store.set_server_uuid("uuid")
-        self.reporter.lsb_release_filename = self.makeFile(SAMPLE_LSB_RELEASE)
+        self.reporter.os_release_filename = self.makeFile(SAMPLE_OS_RELEASE)
         self.facade.set_arch("arch")
 
         # Let's say fetch_async is successful
@@ -454,7 +463,6 @@ class PackageReporterAptTest(LandscapeTest):
 
     @mock.patch("landscape.client.package.reporter.fetch_async")
     def test_fetch_hash_id_db_does_not_download_twice(self, mock_fetch_async):
-
         # Let's say that the hash=>id database is already there
         self.config.package_hash_id_url = "http://fake.url/path/"
         self.config.data_path = self.makeDir()
@@ -470,7 +478,7 @@ class PackageReporterAptTest(LandscapeTest):
         # Fake uuid, codename and arch
         message_store = self.broker_service.message_store
         message_store.set_server_uuid("uuid")
-        self.reporter.lsb_release_filename = self.makeFile(SAMPLE_LSB_RELEASE)
+        self.reporter.os_release_filename = self.makeFile(SAMPLE_OS_RELEASE)
         self.facade.set_arch("arch")
 
         result = self.reporter.fetch_hash_id_db()
@@ -504,29 +512,27 @@ class PackageReporterAptTest(LandscapeTest):
 
     @mock.patch("logging.warning", return_value=None)
     def test_fetch_hash_id_db_undetermined_codename(self, logging_mock):
-
         # Fake uuid
         message_store = self.broker_service.message_store
         message_store.set_server_uuid("uuid")
 
         # Undetermined codename
-        self.reporter.lsb_release_filename = self.makeFile("Foo=bar")
+        self.reporter.os_release_filename = self.makeFile("Foo=bar")
 
         result = self.reporter.fetch_hash_id_db()
 
         logging_mock.assert_called_once_with(
             "Couldn't determine which hash=>id database to use: "
-            f"missing code-name key in {self.reporter.lsb_release_filename}",
+            f"missing code-name key in {self.reporter.os_release_filename}",
         )
         return result
 
     @mock.patch("logging.warning", return_value=None)
     def test_fetch_hash_id_db_undetermined_arch(self, logging_mock):
-
         # Fake uuid and codename
         message_store = self.broker_service.message_store
         message_store.set_server_uuid("uuid")
-        self.reporter.lsb_release_filename = self.makeFile(SAMPLE_LSB_RELEASE)
+        self.reporter.os_release_filename = self.makeFile(SAMPLE_OS_RELEASE)
 
         # Undetermined arch
         self.facade.set_arch("")
@@ -558,7 +564,7 @@ class PackageReporterAptTest(LandscapeTest):
         # Fake uuid, codename and arch
         message_store = self.broker_service.message_store
         message_store.set_server_uuid("uuid")
-        self.reporter.lsb_release_filename = self.makeFile(SAMPLE_LSB_RELEASE)
+        self.reporter.os_release_filename = self.makeFile(SAMPLE_OS_RELEASE)
         self.facade.set_arch("arch")
 
         # Check fetch_async is called with the default url
@@ -590,7 +596,6 @@ class PackageReporterAptTest(LandscapeTest):
         logging_mock,
         mock_fetch_async,
     ):
-
         # Assume package_hash_id_url is set
         self.config.data_path = self.makeDir()
         self.config.package_hash_id_url = "http://fake.url/path/"
@@ -598,7 +603,7 @@ class PackageReporterAptTest(LandscapeTest):
         # Fake uuid, codename and arch
         message_store = self.broker_service.message_store
         message_store.set_server_uuid("uuid")
-        self.reporter.lsb_release_filename = self.makeFile(SAMPLE_LSB_RELEASE)
+        self.reporter.os_release_filename = self.makeFile(SAMPLE_OS_RELEASE)
         self.facade.set_arch("arch")
 
         # Let's say fetch_async fails
@@ -630,7 +635,6 @@ class PackageReporterAptTest(LandscapeTest):
 
     @mock.patch("logging.warning", return_value=None)
     def test_fetch_hash_id_db_with_undetermined_url(self, logging_mock):
-
         # We don't know where to fetch the hash=>id database from
         self.config.url = None
         self.config.package_hash_id_url = None
@@ -638,7 +642,7 @@ class PackageReporterAptTest(LandscapeTest):
         # Fake uuid, codename and arch
         message_store = self.broker_service.message_store
         message_store.set_server_uuid("uuid")
-        self.reporter.lsb_release_filename = self.makeFile(SAMPLE_LSB_RELEASE)
+        self.reporter.os_release_filename = self.makeFile(SAMPLE_OS_RELEASE)
         self.facade.set_arch("arch")
 
         result = self.reporter.fetch_hash_id_db()
@@ -676,7 +680,7 @@ class PackageReporterAptTest(LandscapeTest):
         # Fake uuid, codename and arch
         message_store = self.broker_service.message_store
         message_store.set_server_uuid("uuid")
-        self.reporter.lsb_release_filename = self.makeFile(SAMPLE_LSB_RELEASE)
+        self.reporter.os_release_filename = self.makeFile(SAMPLE_OS_RELEASE)
         self.facade.set_arch("arch")
 
         # Check fetch_async is called with the default url
@@ -1178,10 +1182,14 @@ class PackageReporterAptTest(LandscapeTest):
         """Packages versions coming from security are reported as such."""
         message_store = self.broker_service.message_store
         message_store.set_accepted_types(["packages"])
-        lsb = parse_lsb_release(LSB_RELEASE_FILENAME)
+        os_release_info = parse_os_release(get_os_filename())
         release_path = os.path.join(self.repository_dir, "Release")
         with open(release_path, "w") as release:
-            release.write("Suite: {}-security".format(lsb["code-name"]))
+            release.write(
+                f"Suite: {os_release_info['code-name']}-security\n"
+                "Date: Sat, 02 Jul 2016 05:20:50 +0000\n"
+                "MD5Sum: deadbeef"
+            )
 
         self.store.set_hash_ids({HASH1: 1, HASH2: 2, HASH3: 3})
 
@@ -1235,10 +1243,14 @@ class PackageReporterAptTest(LandscapeTest):
         message_store = self.broker_service.message_store
         message_store.set_accepted_types(["packages"])
 
-        lsb = parse_lsb_release(LSB_RELEASE_FILENAME)
+        os_release_info = parse_os_release(get_os_filename())
         release_path = os.path.join(self.repository_dir, "Release")
         with open(release_path, "w") as release:
-            release.write("Suite: {}-backports".format(lsb["code-name"]))
+            release.write(
+                f"Suite: {os_release_info['code-name']}-backports\n"
+                "Date: Sat, 02 Jul 2016 05:20:50 +0000\n"
+                "MD5Sum: deadbeef"
+            )
 
         self.store.set_hash_ids({HASH1: 1, HASH2: 2, HASH3: 3})
 
@@ -1260,7 +1272,11 @@ class PackageReporterAptTest(LandscapeTest):
 
         release_path = os.path.join(self.repository_dir, "Release")
         with open(release_path, "w") as release:
-            release.write("Suite: my-personal-backports")
+            release.write(
+                "Suite: my-personal-backports"
+                "Date: Sat, 02 Jul 2016 05:20:50 +0000\n"
+                "MD5Sum: deadbeef"
+            )
 
         self.store.set_hash_ids({HASH1: 1, HASH2: 2, HASH3: 3})
 
@@ -1293,13 +1309,21 @@ class PackageReporterAptTest(LandscapeTest):
         os.remove(os.path.join(other_backport_dir, "Packages"))
         self.facade.add_channel_deb_dir(other_backport_dir)
 
-        lsb = parse_lsb_release(LSB_RELEASE_FILENAME)
+        os_release_info = parse_os_release(get_os_filename())
         official_release_path = os.path.join(self.repository_dir, "Release")
         with open(official_release_path, "w") as release:
-            release.write("Suite: {}-backports".format(lsb["code-name"]))
+            release.write(
+                f"Suite: {os_release_info['code-name']}-backports\n"
+                "Date: Sat, 02 Jul 2016 05:20:50 +0000\n"
+                "MD5Sum: deadbeef"
+            )
         unofficial_release_path = os.path.join(other_backport_dir, "Release")
         with open(unofficial_release_path, "w") as release:
-            release.write("Suite: my-personal-backports")
+            release.write(
+                "Suite: my-personal-backports\n"
+                "Date: Sat, 02 Jul 2016 05:20:50 +0000\n"
+                "MD5Sum: deadbeef"
+            )
 
         self.store.set_hash_ids({HASH1: 1, HASH2: 2, HASH3: 3})
 
@@ -1432,34 +1456,6 @@ class PackageReporterAptTest(LandscapeTest):
             self.assertEqual("RESULT", main(["ARGS"]))
         m.assert_called_once_with(PackageReporter, ["ARGS"])
 
-    def test_main_resets_locale(self):
-        """
-        Reporter entry point should reset encoding to utf-8, as libapt-pkg
-        encodes description with system encoding and python-apt decodes
-        them as utf-8 (LP: #1827857).
-        """
-        self._add_package_to_deb_dir(
-            self.repository_dir,
-            "gosa",
-            description="GOsa\u00B2",
-        )
-        self.facade.reload_channels()
-
-        # Set the only non-utf8 locale which we're sure exists.
-        # It behaves slightly differently than the bug, but fails on the
-        # same condition.
-        locale.setlocale(locale.LC_CTYPE, (None, None))
-        self.addCleanup(locale.resetlocale)
-
-        with mock.patch("landscape.client.package.reporter.run_task_handler"):
-            main([])
-
-        # With the actual package, the failure will occur looking up the
-        # description translation.
-        pkg = self.facade.get_packages_by_name("gosa")[0]
-        skel = self.facade.get_package_skeleton(pkg, with_info=True)
-        self.assertEqual("GOsa\u00B2", skel.description)
-
     def test_find_reporter_command_with_bindir(self):
         self.config.bindir = "/spam/eggs"
         command = find_reporter_command(self.config)
@@ -1531,7 +1527,7 @@ class PackageReporterAptTest(LandscapeTest):
         deferred = self.reporter.run()
         self.reactor.advance(0)
         with mock.patch(
-            "landscape.client.package.taskhandler.parse_lsb_release",
+            "landscape.client.package.taskhandler.parse_os_release",
             side_effect=lambda _: {"code-name": "codename"},
         ):
             yield deferred
@@ -1667,7 +1663,7 @@ class PackageReporterAptTest(LandscapeTest):
         self.reactor.advance(0)
         return result
 
-    @mock.patch("logging.warning", return_value=None)
+    @mock.patch("logging.warning", spec=logging.warning, return_value=None)
     def test_run_apt_update_warns_about_lock_failure(self, logging_mock):
         """
         The L{PackageReporter.run_apt_update} method logs a warnings when
@@ -1703,12 +1699,12 @@ class PackageReporterAptTest(LandscapeTest):
             mock.call(message.format(20)),
             mock.call(message.format(40)),
             mock.call(
-                "'{}' exited with status 1000 ()".format(
+                "'{}' exited with status 100 ()".format(
                     self.reporter.apt_update_filename,
                 ),
             ),
         ]
-        logging_mock.has_calls(calls)
+        logging_mock.assert_has_calls(calls)
         return result
 
     def test_run_apt_update_stops_retrying_after_lock_acquired(self):
@@ -2332,7 +2328,6 @@ class PackageReporterAptTest(LandscapeTest):
 
 
 class GlobalPackageReporterAptTest(LandscapeTest):
-
     helpers = [AptFacadeHelper, SimpleRepositoryHelper, BrokerServiceHelper]
 
     def setUp(self):
@@ -2398,7 +2393,6 @@ class GlobalPackageReporterAptTest(LandscapeTest):
 
 
 class FakePackageReporterTest(LandscapeTest):
-
     helpers = [EnvironSaverHelper, BrokerServiceHelper]
 
     def setUp(self):

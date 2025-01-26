@@ -17,6 +17,7 @@ __all__ = [
     "ACTIVE_PROCESS_INFO",
     "COMPUTER_UPTIME",
     "CLIENT_UPTIME",
+    "CLOUD_INIT",
     "OPERATION_RESULT",
     "COMPUTER_INFO",
     "DISTRIBUTION_INFO",
@@ -60,6 +61,7 @@ __all__ = [
     "LIVEPATCH",
     "UBUNTU_PRO_REBOOT_REQUIRED",
     "SNAPS",
+    "SNAP_INFO",
 ]
 
 
@@ -160,6 +162,15 @@ CLOUD_METADATA = Message(
         "instance-id": Unicode(),
         "ami-id": Unicode(),
         "instance-type": Unicode(),
+    },
+)
+
+SNAP_INFO = Message(
+    "snap-info",
+    {
+        "brand": Unicode(),
+        "model": Unicode(),
+        "serial": Unicode(),
     },
 )
 
@@ -350,6 +361,8 @@ REGISTER_3_3 = Message(
         "access_group": Unicode(),
         "clone_secure_id": Any(Unicode(), Constant(None)),
         "ubuntu_pro_info": Unicode(),
+        "hostagent_uid": Unicode(),
+        "installation_request_id": Unicode(),
     },
     api=b"3.3",
     optional=[
@@ -362,6 +375,8 @@ REGISTER_3_3 = Message(
         "juju-info",
         "clone_secure_id",
         "ubuntu_pro_info",
+        "hostagent_uid",
+        "installation_request_id",
     ],
 )
 
@@ -756,6 +771,11 @@ UBUNTU_PRO_REBOOT_REQUIRED = Message(
     {"ubuntu-pro-reboot-required": Unicode()},
 )
 
+CLOUD_INIT = Message(
+    "cloud-init",
+    {"cloud-init": Unicode()},
+)
+
 SNAPS = Message(
     "snaps",
     {
@@ -769,6 +789,7 @@ SNAPS = Message(
                             "version": Unicode(),
                             "revision": Unicode(),
                             "tracking-channel": Unicode(),
+                            "hold": Unicode(),
                             "publisher": KeyDict(
                                 {
                                     "username": Unicode(),
@@ -777,11 +798,57 @@ SNAPS = Message(
                                 strict=False,
                             ),
                             "confinement": Unicode(),
+                            "summary": Unicode(),
+                            "config": Unicode(),
                         },
                         strict=False,
+                        optional=[
+                            "hold",
+                            "summary",
+                            "publisher",
+                            "tracking-channel",
+                            "config",
+                        ],
                     ),
                 ),
             },
+        ),
+    },
+)
+
+SNAP_SERVICES = Message(
+    "snap-services",
+    {
+        "services": KeyDict(
+            {
+                "running": List(
+                    KeyDict(
+                        {
+                            "name": Unicode(),
+                            "snap": Unicode(),
+                            "desktop-file": Unicode(),
+                            "daemon": Unicode(),
+                            "daemon-scope": Unicode(),
+                            "enabled": Bool(),
+                            "active": Bool(),
+                            "activators": List(
+                                Dict(Unicode(), Any(Unicode(), Bool())),
+                            ),
+                        },
+                        strict=False,
+                        optional=[
+                            "snap",
+                            "desktop-file",
+                            "daemon",
+                            "daemon-scope",
+                            "enabled",
+                            "active",
+                            "activators",
+                        ],
+                    ),
+                ),
+            },
+            strict=False,
         ),
     },
 )
@@ -790,6 +857,7 @@ message_schemas = (
     ACTIVE_PROCESS_INFO,
     COMPUTER_UPTIME,
     CLIENT_UPTIME,
+    CLOUD_INIT,
     OPERATION_RESULT,
     COMPUTER_INFO,
     DISTRIBUTION_INFO,
@@ -833,4 +901,6 @@ message_schemas = (
     LIVEPATCH,
     UBUNTU_PRO_REBOOT_REQUIRED,
     SNAPS,
+    SNAP_INFO,
+    SNAP_SERVICES,
 )

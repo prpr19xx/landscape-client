@@ -12,7 +12,7 @@ PACKAGES = [
     "landscape.client.manager",
     "landscape.client.monitor",
     "landscape.client.package",
-    "landscape.client.snap",
+    "landscape.client.snap_http",
     "landscape.client.upgraders",
     "landscape.client.user",
 ]
@@ -25,6 +25,7 @@ MODULES = [
     "landscape.client.patch",
     "landscape.client.reactor",
     "landscape.client.service",
+    "landscape.client.snap_utils",
     "landscape.client.sysvconfig",
     "landscape.client.watchdog",
 ]

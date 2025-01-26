@@ -58,6 +58,12 @@ Landscape service. There are two ways to do this:
 
 ## Developing
 
+After cloning the repository, make sure you run the following command to pull the `snap-http` submodule:
+
+```shell
+git submodule update --init
+```
+
 To run the full test suite, run the following command:
 
 ```
@@ -81,10 +87,15 @@ system bus.
 $ sudo ./scripts/landscape-client -c root-client.conf
 ```
 
-Before opening a PR, make sure to run the full testsuite and lint
+Before opening a PR, make sure to run the full test suite and lint:
 ```
-make check3
+make check
 make lint
+```
+
+You can run a specific test by running the following (for example):
+```
+python3 -m twisted.trial landscape.client.broker.tests.test_client.BrokerClientTest.test_ping
 ```
 
 ### Building the Landscape Client snap
@@ -107,6 +118,13 @@ of the build, and would like to get dropped into a debug shell within the
 snap container in the event of an error:
 ```
 $ make snap-debug
+```
+
+To use the make targets below, make sure you have [yq](https://github.com/mikefarah/yq) installed. You can install it using [Homebrew](https://brew.sh/) or as a snap:
+
+```console
+$ brew install yq
+$ snap install yq
 ```
 
 To install the resulting snap:
@@ -158,7 +176,7 @@ $ gnome-keyring-daemon --unlock
 The gnome-keyring-daemon will prompt you (without a prompt) to type in
 the initial unlock password (typically the same password for the account
 you are using - if you are using the default multipass or lxc "ubuntu"
-login, use sudo passwd ubuntu to set it to a known value before doing 
+login, use sudo passwd ubuntu to set it to a known value before doing
 the above step).
 
 Type the login password and hit <ENTER> followed by <CTRL>+D to end
@@ -187,3 +205,9 @@ uploading the snap or otherwise manipulating things in your store
 account.  You will need to repeat the dbus-run-session and
 gnome-keyring-daemon steps BEFORE logging in if you do need to be
 logged into the store.
+
+### Automatic Builds and Releases
+
+The latest version of landscape-client snap will be built from the most recent commit and
+published to the `latest/edge` channel via [a recipe on launchpad](https://launchpad.net/~landscape/landscape-client/+snap/core-dev).
+Other channels are promoted and released manually.

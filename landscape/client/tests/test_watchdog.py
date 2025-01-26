@@ -13,6 +13,7 @@ from twisted.internet.utils import getProcessOutput
 from twisted.python.fakepwd import UserDatabase
 
 import landscape.client.watchdog
+from landscape.client import USER
 from landscape.client.amp import ComponentConnector
 from landscape.client.broker.amp import RemoteBrokerConnector
 from landscape.client.reactor import LandscapeReactor
@@ -792,7 +793,7 @@ time.sleep(999)
             "GRACEFUL_WAIT_PERIOD",
             landscape.client.watchdog.GRACEFUL_WAIT_PERIOD,
         )
-        landscape.client.watchdog.GRACEFUL_WAIT_PERIOD = 0.2
+        landscape.client.watchdog.GRACEFUL_WAIT_PERIOD = 1
         self.daemon.start()
 
         def got_result(result):
@@ -1006,22 +1007,13 @@ time.sleep(999)
         daemon.start()
 
         getuid.assert_called_with()
-        getpwnam.assert_called_with("landscape")
-
-        env = os.environ.copy()
-        env["HOME"] = "/var/lib/landscape"
-        env["USER"] = "landscape"
-        env["LOGNAME"] = "landscape"
-        # This looks like testing implementation, but we want to assert that
-        # the environment variables are encoded before passing to
-        # spawnProcess() to cope with unicode in them.
-        env = encode_values(env)
+        getpwnam.assert_called_with(USER)
 
         reactor.spawnProcess.assert_called_with(
             mock.ANY,
             mock.ANY,
             args=mock.ANY,
-            env=env,
+            env=mock.ANY,
             uid=123,
             gid=456,
         )
@@ -1155,8 +1147,27 @@ class WatchDogOptionsTest(LandscapeTest):
         self.config.load(["--monitor-only"])
         self.assertEqual(self.config.get_enabled_daemons(), [Broker, Monitor])
 
+    def test_monitor_only_false(self):
+        self.config.load(["--monitor-only", "false"])
+        self.assertEqual(
+            self.config.get_enabled_daemons(),
+            [Broker, Monitor, Manager],
+        )
+
     def test_default_daemons(self):
         self.config.load([])
+        self.assertEqual(
+            self.config.get_enabled_daemons(),
+            [Broker, Monitor, Manager],
+        )
+
+    @mock.patch("landscape.client.deployment.info")
+    def test_monitor_only_invalid_entry(self, logging):
+        self.config.load(["--monitor-only", "invalid-option"])
+        logging.assert_called_once_with(
+            "Error. Invalid boolean provided in config or parameters. "
+            + "Defaulting to False.",
+        )
         self.assertEqual(
             self.config.get_enabled_daemons(),
             [Broker, Monitor, Manager],
@@ -1352,7 +1363,7 @@ class WatchDogServiceTest(LandscapeTest):
         data_path = self.makeDir()
         log_dir = self.makeDir()
         fake_pwd = UserDatabase()
-        fake_pwd.addUser("landscape", None, 1234, None, None, None, None)
+        fake_pwd.addUser(USER, None, 1234, None, None, None, None)
 
         mock_getgrnam("root").gr_gid = 5678
 
@@ -1450,11 +1461,11 @@ class WatchDogRunTests(LandscapeTest):
         The watchdog should print an error message and exit if run by a normal
         user.
         """
-        self.fake_pwd.addUser("landscape", None, 1001, None, None, None, None)
+        self.fake_pwd.addUser(USER, None, 1001, None, None, None, None)
         with mock.patch("landscape.client.watchdog.pwd", new=self.fake_pwd):
             sys_exit = self.assertRaises(SystemExit, run, ["landscape-client"])
         self.assertIn(
-            "landscape-client can only be run as 'root' or 'landscape'.",
+            f"landscape-client can only be run as 'root' or '{USER}'.",
             str(sys_exit),
         )
 
@@ -1463,7 +1474,7 @@ class WatchDogRunTests(LandscapeTest):
         The watchdog *can* be run as the 'landscape' user.
         """
         self.fake_pwd.addUser(
-            "landscape",
+            USER,
             None,
             os.getuid(),
             None,
@@ -1483,11 +1494,11 @@ class WatchDogRunTests(LandscapeTest):
         """
         with mock.patch("landscape.client.watchdog.pwd", new=self.fake_pwd):
             sys_exit = self.assertRaises(SystemExit, run, ["landscape-client"])
-        self.assertIn("The 'landscape' user doesn't exist!", str(sys_exit))
+        self.assertIn(f"The '{USER}' user doesn't exist!", str(sys_exit))
 
     def test_clean_environment(self):
         self.fake_pwd.addUser(
-            "landscape",
+            USER,
             None,
             os.getuid(),
             None,
@@ -1509,3 +1520,23 @@ class WatchDogRunTests(LandscapeTest):
         self.assertNotIn("LANDSCAPE_ATTACHMENTS", os.environ)
         self.assertNotIn("MAIL", os.environ)
         self.assertEqual(os.environ["UNRELATED"], "unrelated")
+
+    @mock.patch.object(WatchDogConfiguration, "auto_configure")
+    @mock.patch("landscape.client.watchdog.IS_SNAP", "1")
+    def test_is_snap(self, mock_auto_configure):
+        """Should call `WatchDogConfiguration.auto_configure`."""
+        reactor = FakeReactor()
+        self.fake_pwd.addUser(
+            USER,
+            None,
+            os.getuid(),
+            None,
+            None,
+            None,
+            None,
+        )
+        with mock.patch("landscape.client.watchdog.pwd", new=self.fake_pwd):
+            run(["--log-dir", self.makeDir()], reactor=reactor)
+
+        mock_auto_configure.assert_called_once_with(retry=True)
+        self.assertTrue(reactor.running)

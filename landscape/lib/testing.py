@@ -178,11 +178,11 @@ class ConfigTestCase(FSTestCase):
         """
         first_fp = cstringio(first)
         first_parser = ConfigParser()
-        first_parser.readfp(first_fp)
+        first_parser.read_file(first_fp)
 
         second_fp = cstringio(second)
         second_parser = ConfigParser()
-        second_parser.readfp(second_fp)
+        second_parser.read_file(second_fp)
 
         self.assertEqual(
             set(first_parser.sections()),
@@ -685,7 +685,15 @@ class FakeReactor(EventHandlingReactorMixin):
             # because the call might cancel it!
             call._data = self.call_later(seconds, fake)._data
             try:
-                f(*args, **kwargs)
+                deferred = f(*args, **kwargs)
+
+                if (
+                    hasattr(deferred, "result")
+                    and isinstance(deferred.result, Failure)
+                ):
+                    # Required for failures to get GC'd and properly flushed.
+                    # Twisted did this for us in versions < 24.10.
+                    deferred.result.cleanFailure()
             except Exception:
                 if call.active:
                     self.cancel_call(call)

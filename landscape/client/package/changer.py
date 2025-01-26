@@ -4,12 +4,14 @@ import os
 import pwd
 import time
 
+import dbus
 from twisted.internet import reactor
 from twisted.internet.defer import maybeDeferred
 from twisted.internet.defer import succeed
 
+from landscape.client import GROUP
+from landscape.client import USER
 from landscape.client.manager.manager import FAILED
-from landscape.client.manager.shutdownmanager import ShutdownProcessProtocol
 from landscape.client.monitor.rebootrequired import REBOOT_REQUIRED_FILENAME
 from landscape.client.package.reporter import find_reporter_command
 from landscape.client.package.taskhandler import PackageTaskError
@@ -28,7 +30,6 @@ from landscape.constants import UNKNOWN_PACKAGE_DATA_TIMEOUT
 from landscape.lib import base64
 from landscape.lib.config import get_bindir
 from landscape.lib.fs import create_binary_file
-from landscape.lib.log import log_failure
 
 
 class UnknownPackageData(Exception):
@@ -118,8 +119,8 @@ class PackageChanger(PackageTaskHandler):
             return
 
         if os.getuid() == 0:
-            os.setgid(grp.getgrnam("landscape").gr_gid)
-            os.setuid(pwd.getpwnam("landscape").pw_uid)
+            os.setgid(grp.getgrnam(GROUP).gr_gid)
+            os.setuid(pwd.getpwnam(USER).pw_uid)
         command = find_reporter_command(self._config)
         if self._config.config is not None:
             command += f" -c {self._config.config}"
@@ -365,27 +366,23 @@ class PackageChanger(PackageTaskHandler):
     def _reboot_later(self, result):
         self._landscape_reactor.call_later(5, self._run_reboot)
 
-    def _run_reboot(self):
+    def _run_reboot(self, bus=None):
         """
-        Create a C{ShutdownProcessProtocol} and return its result deferred.
+        Fire a dbus system shutdown
         """
-        protocol = ShutdownProcessProtocol()
-        minutes = "now"
-        protocol.set_timeout(self._landscape_reactor)
-        protocol.result.addCallback(self._log_reboot, minutes)
-        protocol.result.addErrback(log_failure, "Reboot failed.")
-        args = [
-            "/sbin/shutdown",
-            "-r",
-            minutes,
-            "Landscape is rebooting the system",
-        ]
-        self._process_factory.spawnProcess(
-            protocol,
-            "/sbin/shutdown",
-            args=args,
+        if bus is None:
+            self.bus = dbus.SystemBus()
+        else:
+            self.bus = bus
+
+        self.bus_object = self.bus.get_object(
+            "org.freedesktop.login1",
+            "/org/freedesktop/login1",
         )
-        return protocol.result
+        self.bus_object.Reboot(
+            True,
+            dbus_interface="org.freedesktop.login1.Manager",
+        )
 
     def _log_reboot(self, result, minutes):
         """Log the reboot."""

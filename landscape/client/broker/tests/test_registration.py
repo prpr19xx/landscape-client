@@ -78,6 +78,9 @@ class IdentityTest(LandscapeTest):
     def test_access_group(self):
         self.check_config_property("access_group")
 
+    def test_hostagent_uid(self):
+        self.check_config_property("hostagent_uid")
+
 
 class RegistrationHandlerTestBase(LandscapeTest):
 
@@ -383,6 +386,88 @@ class RegistrationHandlerTest(RegistrationHandlerTestBase):
         # Make sure the key does not appear in the outgoing message.
         self.assertNotIn("access_group", messages[0])
 
+    def test_queue_message_on_exchange_with_hostagent_uid(self):
+        """
+        If the admin has defined a hostagent_uid for this computer, we send
+        it to the server.
+        """
+        self.mstore.set_accepted_types(["register"])
+        # hostagent_uid is introduced in the 3.3 message schema
+        self.mstore.set_server_api(b"3.3")
+        self.config.account_name = "account_name"
+        self.config.hostagent_uid = "dinosaur computer"
+        self.config.tags = "server,london"
+        self.reactor.fire("pre-exchange")
+        messages = self.mstore.get_pending_messages()
+        self.assertEqual("dinosaur computer", messages[0]["hostagent_uid"])
+
+    def test_queue_message_on_exchange_with_empty_hostagent_uid(self):
+        """
+        If the hostagent_uid is "", then the outgoing message does not define
+        a "hostagent_uid" key.
+        """
+        self.mstore.set_accepted_types(["register"])
+        # hostagent_uid is introduced in the 3.3 message schema
+        self.mstore.set_server_api(b"3.3")
+        self.config.hostagent_uid = ""
+        self.reactor.fire("pre-exchange")
+        messages = self.mstore.get_pending_messages()
+        self.assertNotIn("hostagent_uid", messages[0])
+
+    def test_queue_message_on_exchange_with_none_hostagent_uid(self):
+        """
+        If the hostagent_uid is None, then the outgoing message does not define
+        a "hostagent_uid" key.
+        """
+        self.mstore.set_accepted_types(["register"])
+        # hostagent_uid is introduced in the 3.3 message schema
+        self.mstore.set_server_api(b"3.3")
+        self.config.hostagent_uid = None
+        self.reactor.fire("pre-exchange")
+        messages = self.mstore.get_pending_messages()
+        self.assertNotIn("hostagent_uid", messages[0])
+
+    def test_queue_message_on_exchange_with_installation_request_id(self):
+        """
+        If the admin has defined a installation_request_id for this computer,
+        we send it to the server.
+        """
+        self.mstore.set_accepted_types(["register"])
+        self.mstore.set_server_api(b"3.3")
+        self.config.account_name = "account_name"
+        self.config.installation_request_id = "installed-according-to-plan"
+        self.config.tags = "server,london"
+        self.reactor.fire("pre-exchange")
+        messages = self.mstore.get_pending_messages()
+        self.assertEqual(
+            "installed-according-to-plan",
+            messages[0]["installation_request_id"],
+        )
+
+    def test_queue_message_on_exchange_and_empty_installation_request_id(self):
+        """
+        If the installation_request_id is "", then the outgoing message
+        does not define an "installation_request_id" key.
+        """
+        self.mstore.set_accepted_types(["register"])
+        self.mstore.set_server_api(b"3.3")
+        self.config.installation_request_id = ""
+        self.reactor.fire("pre-exchange")
+        messages = self.mstore.get_pending_messages()
+        self.assertNotIn("installation_request_id", messages[0])
+
+    def test_queue_message_on_exchange_with_none_installation_request_id(self):
+        """
+        If the installation_request_id is None, then the outgoing message
+        does not define an "installation_request_id" key.
+        """
+        self.mstore.set_accepted_types(["register"])
+        self.mstore.set_server_api(b"3.3")
+        self.config.installation_request_id = None
+        self.reactor.fire("pre-exchange")
+        messages = self.mstore.get_pending_messages()
+        self.assertNotIn("installation_request_id", messages[0])
+
     def test_queueing_registration_message_resets_message_store(self):
         """
         When a registration message is queued, the store is reset
@@ -457,7 +542,7 @@ class RegistrationHandlerTest(RegistrationHandlerTestBase):
             {"type": b"registration", "info": b"blah-blah"},
         )
         for name, args, kwargs in reactor_fire_mock.mock_calls:
-            self.assertNotEquals("registration-failed", args[0])
+            self.assertNotEqual("registration-failed", args[0])
 
     def test_register_resets_ids(self):
         self.identity.secure_id = "foo"
@@ -615,6 +700,39 @@ class RegistrationHandlerTest(RegistrationHandlerTestBase):
         self.reactor.fire("pre-exchange")
         messages = self.mstore.get_pending_messages()
         self.assertEqual(socket.getfqdn(), messages[0]["hostname"])
+
+    def test_ubuntu_pro_info_present_in_registration(self):
+        """Ubuntu Pro info is included to handle licensing in Server"""
+        self.mstore.set_server_api(b"3.3")
+        self.mstore.set_accepted_types(["register"])
+        self.config.computer_title = "Computer Title"
+        self.config.account_name = "account_name"
+        self.reactor.fire("pre-exchange")
+        messages = self.mstore.get_pending_messages()
+        self.assertIn("ubuntu_pro_info", messages[0])
+
+    @mock.patch("landscape.client.manager.ubuntuproinfo.IS_CORE", new=True)
+    def test_ubuntu_pro_info_present_on_core_for_licensing(self):
+        """
+        Ubuntu Pro info is mocked and sufficient for licensing on Core distros
+        during the registration message
+        """
+
+        self.mstore.set_server_api(b"3.3")
+        self.mstore.set_accepted_types(["register"])
+        self.config.computer_title = "Computer Title"
+        self.config.account_name = "account_name"
+        self.reactor.fire("pre-exchange")
+
+        messages = self.mstore.get_pending_messages()
+
+        # verify the minimum necessary fields that Server expects
+        self.assertIn("ubuntu_pro_info", messages[0])
+        ubuntu_pro_info = json.loads(messages[0]["ubuntu_pro_info"])
+        self.assertIn("effective", ubuntu_pro_info)
+        self.assertIn("expires", ubuntu_pro_info)
+        contract = ubuntu_pro_info["contract"]
+        self.assertIn("landscape", contract["products"])
 
 
 class JujuRegistrationHandlerTest(RegistrationHandlerTestBase):

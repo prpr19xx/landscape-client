@@ -9,6 +9,8 @@ from twisted.internet.defer import Deferred
 from twisted.internet.defer import fail
 from twisted.internet.defer import succeed
 
+from landscape.client import GROUP
+from landscape.client import USER
 from landscape.client.manager.manager import FAILED
 from landscape.client.manager.manager import SUCCEEDED
 from landscape.client.package.releaseupgrader import main
@@ -39,7 +41,6 @@ class ReleaseUpgraderConfigurationTest(unittest.TestCase):
 
 
 class ReleaseUpgraderTest(LandscapeTest):
-
     helpers = [LogKeeperHelper, EnvironSaverHelper, BrokerServiceHelper]
 
     def setUp(self):
@@ -357,7 +358,6 @@ class ReleaseUpgraderTest(LandscapeTest):
         deferred = Deferred()
 
         def do_test():
-
             result = self.upgrader.upgrade("karmic", 100)
 
             def check_result(ignored):
@@ -391,7 +391,8 @@ class ReleaseUpgraderTest(LandscapeTest):
         reactor.callWhenRunning(do_test)
 
         def cleanup(ignored):
-            os.environ = env_backup
+            os.environ.clear()
+            os.environ.update(env_backup)
             return ignored
 
         return deferred.addBoth(cleanup)
@@ -418,7 +419,6 @@ class ReleaseUpgraderTest(LandscapeTest):
         deferred = Deferred()
 
         def do_test():
-
             result = self.upgrader.upgrade(
                 "karmic",
                 100,
@@ -451,7 +451,8 @@ class ReleaseUpgraderTest(LandscapeTest):
         reactor.callWhenRunning(do_test)
 
         def cleanup(ignored):
-            os.environ = env_backup
+            os.environ.clear()
+            os.environ.update(env_backup)
             return ignored
 
         return deferred.addBoth(cleanup)
@@ -472,7 +473,6 @@ class ReleaseUpgraderTest(LandscapeTest):
         deferred = Deferred()
 
         def do_test():
-
             result = self.upgrader.upgrade("karmic", 100)
 
             def check_result(ignored):
@@ -538,7 +538,6 @@ class ReleaseUpgraderTest(LandscapeTest):
         deferred = Deferred()
 
         def do_test():
-
             result = self.upgrader.upgrade("karmic", 100)
 
             def kill_child(how):
@@ -661,8 +660,8 @@ class ReleaseUpgraderTest(LandscapeTest):
         self.assertEqual(spawn_process_calls, [True])
 
         getuid_mock.assert_called_once_with()
-        getpwnam_mock.assert_called_once_with("landscape")
-        getgrnam_mock.assert_called_once_with("landscape")
+        getpwnam_mock.assert_called_once_with(USER)
+        getgrnam_mock.assert_called_once_with(GROUP)
 
     def test_finish_with_config_file(self):
         """
@@ -756,8 +755,8 @@ class ReleaseUpgraderTest(LandscapeTest):
         self.upgrader.upgrade = upgrade
         self.upgrader.finish = finish
 
-        self.upgrader.lsb_release_filename = self.makeFile(
-            "DISTRIB_CODENAME=jaunty\n",
+        self.upgrader.os_release_filename = self.makeFile(
+            "VERSION_CODENAME=jaunty\n",
         )
 
         message = {
@@ -785,8 +784,8 @@ class ReleaseUpgraderTest(LandscapeTest):
         The L{ReleaseUpgrader.handle_release_upgrade} method reports a
         failure if the system is already running the desired release.
         """
-        self.upgrader.lsb_release_filename = self.makeFile(
-            "DISTRIB_CODENAME=karmic\n",
+        self.upgrader.os_release_filename = self.makeFile(
+            "VERSION_CODENAME=karmic\n",
         )
 
         message = {
@@ -825,8 +824,8 @@ class ReleaseUpgraderTest(LandscapeTest):
         The L{ReleaseUpgrader.handle_release_upgrade} method reports a
         failure if any of the helper method errbacks.
         """
-        self.upgrader.lsb_release_filename = self.makeFile(
-            "DISTRIB_CODENAME=jaunty\n",
+        self.upgrader.os_release_filename = self.makeFile(
+            "VERSION_CODENAME=jaunty\n",
         )
 
         calls = []

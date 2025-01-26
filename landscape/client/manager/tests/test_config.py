@@ -21,6 +21,10 @@ class ManagerConfigurationTest(LandscapeTest):
                 "HardwareInfo",
                 "KeystoneToken",
                 "SnapManager",
+                "SnapServicesManager",
+                "UbuntuProInfo",
+                "LivePatch",
+                "UbuntuProRebootRequired",
             ],
             ALL_PLUGINS,
         )

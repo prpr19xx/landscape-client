@@ -25,10 +25,14 @@ from twisted.internet.defer import succeed
 from twisted.internet.error import ProcessExitedAlready
 from twisted.internet.protocol import ProcessProtocol
 
+from landscape.client import GROUP
+from landscape.client import IS_SNAP
+from landscape.client import USER
 from landscape.client.broker.amp import RemoteBrokerConnector
 from landscape.client.broker.amp import RemoteManagerConnector
 from landscape.client.broker.amp import RemoteMonitorConnector
 from landscape.client.deployment import Configuration
+from landscape.client.deployment import convert_arg_to_bool
 from landscape.client.deployment import init_logging
 from landscape.client.reactor import LandscapeReactor
 from landscape.lib.bootstrap import BootstrapDirectory
@@ -78,7 +82,7 @@ class Daemon:
         program.  Defaults to False.
     """
 
-    username = "landscape"
+    username = USER
     max_retries = 3
     factor = 1.1
     options = None
@@ -506,19 +510,22 @@ class WatchDog:
 class WatchDogConfiguration(Configuration):
     def make_parser(self):
         parser = super().make_parser()
-        parser.add_option(
+        parser.add_argument(
             "--daemon",
             action="store_true",
             help="Fork and run in the background.",
         )
-        parser.add_option(
+        parser.add_argument(
             "--pid-file",
-            type="str",
+            type=str,
             help="The file to write the PID to.",
         )
-        parser.add_option(
+        parser.add_argument(
             "--monitor-only",
-            action="store_true",
+            type=convert_arg_to_bool,
+            nargs="?",
+            const=True,
+            default=False,
             help="Don't enable management features. This is "
             "useful if you want to run the client as a non-root "
             "user.",
@@ -649,41 +656,26 @@ class WatchDogService(Service):
 
 bootstrap_list = BootstrapList(
     [
-        BootstrapDirectory("$data_path", "landscape", "root", 0o755),
-        BootstrapDirectory("$data_path/package", "landscape", "root", 0o755),
-        BootstrapDirectory(
-            "$data_path/package/hash-id",
-            "landscape",
-            "root",
-            0o755,
-        ),
-        BootstrapDirectory(
-            "$data_path/package/binaries",
-            "landscape",
-            "root",
-            0o755,
-        ),
+        BootstrapDirectory("$data_path", USER, GROUP, 0o755),
+        BootstrapDirectory("$data_path/package", USER, GROUP, 0o755),
+        BootstrapDirectory("$data_path/package/hash-id", USER, GROUP, 0o755),
+        BootstrapDirectory("$data_path/package/binaries", USER, GROUP, 0o755),
         BootstrapDirectory(
             "$data_path/package/upgrade-tool",
-            "landscape",
+            USER,
             "root",
             0o755,
         ),
-        BootstrapDirectory("$data_path/messages", "landscape", "root", 0o755),
-        BootstrapDirectory("$data_path/sockets", "landscape", "root", 0o750),
+        BootstrapDirectory("$data_path/messages", USER, GROUP, 0o755),
+        BootstrapDirectory("$data_path/sockets", USER, GROUP, 0o750),
         BootstrapDirectory(
             "$data_path/custom-graph-scripts",
-            "landscape",
-            "root",
+            USER,
+            GROUP,
             0o755,
         ),
-        BootstrapDirectory("$log_dir", "landscape", "root", 0o755),
-        BootstrapFile(
-            "$data_path/package/database",
-            "landscape",
-            "root",
-            0o644,
-        ),
+        BootstrapDirectory("$log_dir", USER, GROUP, 0o755),
+        BootstrapFile("$data_path/package/database", USER, GROUP, 0o644),
     ],
 )
 
@@ -724,14 +716,17 @@ def run(args=sys.argv, reactor=None):
     config.load(args)
 
     try:
-        landscape_uid = pwd.getpwnam("landscape").pw_uid
+        landscape_uid = pwd.getpwnam(USER).pw_uid
     except KeyError:
-        sys.exit("The 'landscape' user doesn't exist!")
+        sys.exit(f"The '{USER}' user doesn't exist!")
 
     if os.getuid() not in (0, landscape_uid):
-        sys.exit("landscape-client can only be run as 'root' or 'landscape'.")
+        sys.exit(f"landscape-client can only be run as 'root' or '{USER}'.")
 
     init_logging(config, "watchdog")
+
+    if IS_SNAP:
+        config.auto_configure(retry=True)
 
     application = Application("landscape-client")
     watchdog_service = WatchDogService(config)

@@ -20,10 +20,8 @@ ALL_PLUGINS = [
     "SwiftUsage",
     "CephUsage",
     "ComputerTags",
-    "UbuntuProInfo",
-    "LivePatch",
-    "UbuntuProRebootRequired",
-    "SnapMonitor",
+    "SnapServicesMonitor",
+    "CloudInit",
 ]
 
 
@@ -37,7 +35,7 @@ class MonitorConfiguration(Configuration):
         """
         parser = super().make_parser()
 
-        parser.add_option(
+        parser.add_argument(
             "--monitor-plugins",
             metavar="PLUGIN_LIST",
             help="Comma-delimited list of monitor plugins to "
